@@ -348,6 +348,18 @@ def test_format_fallback_respects_character_cap_by_dropping_lines():
 # ---------------------------------------------------------------------------
 
 
+def test_system_prompt_forbids_fabricated_ticker_commentary():
+    # Regression lock: the payload sent to the model contains only
+    # flags/nominal/data_quality_notes, never raw per-ticker metrics --
+    # an earlier version of this prompt promised a "notable per-ticker
+    # one-liners" section with nothing to draw that content from except
+    # the model's own general knowledge about the ticker, which is
+    # exactly the fabrication risk this tool exists to prevent.
+    prompt = brief.SYSTEM_PROMPT_TEMPLATE
+    assert "one-liner" not in prompt.lower()
+    assert "other knowledge about the company" in prompt
+
+
 def _fake_client(response_text: str):
     client = Mock()
     client.messages.create.return_value = SimpleNamespace(

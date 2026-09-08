@@ -387,16 +387,20 @@ phrase these as short lines in the given order, not to add commentary, \
 preamble, or a sign-off. A quiet day is three lines.
 
 Hard constraints:
+- Your JSON input contains ONLY flags, a nominal-ticker list, and data \
+quality notes -- no raw per-ticker metrics. There is nothing else to \
+report: never add commentary, context, or a per-ticker note about \
+anything not already present in this JSON, even if you recognize the \
+ticker or have other knowledge about the company. If it isn't in the \
+input, it doesn't exist for this briefing.
 - Output MUST be {max_characters} characters or fewer, total. This is \
 enforced in code after you respond; exceeding it fails the run.
 - Use ONLY numbers present in the JSON input. Never compute, estimate, \
 or state a number that isn't already there.
 - Sections, in order, only if they have content:
   1. Flags, in the order given, one line each.
-  2. Notable per-ticker one-liners, only for anything not already \
-covered by a flag above.
-  3. One line: "N tickers nominal" (name them only if it fits).
-  4. Data quality notes, if any.
+  2. One line: "N tickers nominal" (name them only if it fits).
+  3. Data quality notes, if any.
 - No preamble ("Good morning", "Here's your briefing"). No sign-off \
 ("Trade carefully"). No restating a number already shown in the flags \
 section."""
