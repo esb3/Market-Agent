@@ -166,3 +166,58 @@ def test_risk_free_rate_decimal_none_when_no_data():
     payload = {"observations": []}
     with patch("sources.fred.requests.get", return_value=FakeResponse(200, payload)):
         assert client.risk_free_rate_decimal() is None
+
+
+# ---------------------------------------------------------------------------
+# history
+# ---------------------------------------------------------------------------
+
+
+def test_history_returns_all_observations_oldest_first():
+    client = make_client()
+    payload = {
+        "observations": [
+            {"date": "2026-09-03", "value": "14.5"},
+            {"date": "2026-09-04", "value": "15.1"},
+            {"date": "2026-09-05", "value": "13.9"},
+        ]
+    }
+    with patch("sources.fred.requests.get", return_value=FakeResponse(200, payload)):
+        history = client.history("vix", date(2026, 9, 1), date(2026, 9, 5))
+    assert [o.value for o in history] == pytest.approx([14.5, 15.1, 13.9])
+    assert [o.as_of for o in history] == [date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 5)]
+
+
+def test_history_skips_missing_value_markers():
+    client = make_client()
+    payload = {
+        "observations": [
+            {"date": "2026-09-03", "value": "14.5"},
+            {"date": "2026-09-04", "value": "."},  # holiday
+            {"date": "2026-09-05", "value": "13.9"},
+        ]
+    }
+    with patch("sources.fred.requests.get", return_value=FakeResponse(200, payload)):
+        history = client.history("vix", date(2026, 9, 1), date(2026, 9, 5))
+    assert len(history) == 2
+
+
+def test_history_unknown_series_key_raises_value_error():
+    client = make_client()
+    with pytest.raises(ValueError):
+        client.history("not_a_real_series", date(2026, 9, 1), date(2026, 9, 5))
+
+
+def test_history_empty_result_is_empty_list_not_error():
+    client = make_client()
+    payload = {"observations": []}
+    with patch("sources.fred.requests.get", return_value=FakeResponse(200, payload)):
+        assert client.history("vix", date(2026, 9, 1), date(2026, 9, 5)) == []
+
+
+def test_history_schema_error_on_malformed_response():
+    client = make_client()
+    payload = {"error_message": "bad series"}
+    with patch("sources.fred.requests.get", return_value=FakeResponse(200, payload)):
+        with pytest.raises(SchemaError):
+            client.history("vix", date(2026, 9, 1), date(2026, 9, 5))

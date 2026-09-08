@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 import requests
 
@@ -85,29 +85,18 @@ class FredClient:
             retry_on=(SourceUnavailable,),
         )
 
-    def latest_observation(self, series_key: str, lookback_days: int = 10) -> Optional[Observation]:
-        """Most recent non-missing observation for a tracked series (see
-        SERIES_IDS). Returns None only when FRED legitimately has no
-        data in the lookback window — a malformed response is always a
-        SchemaError, never None."""
-        if series_key not in SERIES_IDS:
-            raise ValueError(f"unknown FRED series key: {series_key!r}")
-        series_id = SERIES_IDS[series_key]
-        end = date.today()
-        start = end - timedelta(days=lookback_days)
-        payload = self._fetch(series_id, start, end)
-
+    def _parse_observations(self, payload: dict, series_id: str) -> List[Observation]:
         if not isinstance(payload, dict) or "observations" not in payload:
             raise SchemaError(
                 f"FRED {series_id}: response missing 'observations' "
                 f"(possibly a bad series ID) — {payload.get('error_message', payload) if isinstance(payload, dict) else payload}"
             )
-
         obs = payload["observations"]
         if not isinstance(obs, list):
             raise SchemaError(f"FRED {series_id}: 'observations' is not a list")
 
-        for row in reversed(obs):
+        result = []
+        for row in obs:
             if not isinstance(row, dict) or "date" not in row or "value" not in row:
                 raise SchemaError(f"FRED {series_id}: observation missing date/value: {row}")
             if row["value"] == FRED_MISSING_VALUE:
@@ -120,9 +109,35 @@ class FredClient:
                 as_of = datetime.strptime(row["date"], "%Y-%m-%d").date()
             except (TypeError, ValueError) as exc:
                 raise SchemaError(f"FRED {series_id}: unparseable date {row['date']!r}") from exc
-            return Observation(value=value, as_of=as_of, source="fred", series=series_id, fetched_at=date.today())
+            result.append(Observation(value=value, as_of=as_of, source="fred", series=series_id, fetched_at=date.today()))
+        return result
 
-        return None
+    def latest_observation(self, series_key: str, lookback_days: int = 10) -> Optional[Observation]:
+        """Most recent non-missing observation for a tracked series (see
+        SERIES_IDS). Returns None only when FRED legitimately has no
+        data in the lookback window — a malformed response is always a
+        SchemaError, never None."""
+        if series_key not in SERIES_IDS:
+            raise ValueError(f"unknown FRED series key: {series_key!r}")
+        series_id = SERIES_IDS[series_key]
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+        payload = self._fetch(series_id, start, end)
+        observations = self._parse_observations(payload, series_id)
+        return observations[-1] if observations else None
+
+    def history(self, series_key: str, start: date, end: date) -> List[Observation]:
+        """All non-missing observations for a tracked series between
+        `start` and `end` inclusive, oldest first. Unlike
+        latest_observation(), this exists for percentile/rank
+        calculations that need real history — FRED (unlike IV) has
+        decades of VIX data available for free from day one, so there's
+        no sample-size problem to work around here."""
+        if series_key not in SERIES_IDS:
+            raise ValueError(f"unknown FRED series key: {series_key!r}")
+        series_id = SERIES_IDS[series_key]
+        payload = self._fetch(series_id, start, end)
+        return self._parse_observations(payload, series_id)
 
     def vix_complex(self) -> dict:
         """VIX, VIX9D, VIX3M, and the 3-month T-bill rate as of the most

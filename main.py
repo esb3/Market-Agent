@@ -352,6 +352,24 @@ def build_market_metrics(deps: Deps, config: dict, today: date) -> Tuple[dict, L
     if tbill is not None:
         market["risk_free_rate"] = tbill.value / 100
 
+    if "vix" in market:
+        vix_cfg = config["vix"]
+        window_days = vix_cfg["percentile_window_days"]
+        # Padded for weekends/holidays, same pattern as the yfinance
+        # lookback -- history() is date-range based, not "last N points".
+        start = today - timedelta(days=int(window_days * 1.6) + 10)
+        try:
+            history_obs = deps.fred_client.history("vix", start, today - timedelta(days=1))
+        except SourceError as exc:
+            notes.append(_note("FRED VIX history unavailable", exc))
+        else:
+            history_values = [o.value for o in history_obs][-window_days:]
+            pct = metrics.sampled_percentile(history_values, market["vix"], min_sample=vix_cfg["percentile_min_sample"])
+            if pct.sufficient:
+                market["vix_percentile"] = {"value": pct.value, "sufficient": True, "label": pct.label()}
+            else:
+                notes.append(f"VIX percentile suppressed ({pct.label()}, need {vix_cfg['percentile_min_sample']}+)")
+
     market["macro_dates"] = build_macro_dates(config, today=today)
 
     return market, notes

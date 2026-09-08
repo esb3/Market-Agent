@@ -204,6 +204,21 @@ def _market_flags(market_metrics: dict, config: dict) -> List[Flag]:
             )
         )
 
+    vix_pctl = market_metrics.get("vix_percentile")  # {"value":.., "sufficient":bool, "label":..}
+    if vix_pctl and vix_pctl.get("sufficient") and vix_pctl.get("value") is not None:
+        bands = config.get("vix", {}).get("percentile_bands")
+        if bands:
+            val = vix_pctl["value"]
+            if val <= bands["low"] or val >= bands["high"]:
+                out.append(
+                    Flag(
+                        severity=65,
+                        category="vix_percentile",
+                        ticker=None,
+                        message=f"VIX percentile {val:.0f} ({vix_pctl.get('label', '')})",
+                    )
+                )
+
     yesterday_vix = market_metrics.get("vix_yesterday")
     vix = market_metrics.get("vix")
     threshold = config.get("delta_thresholds", {}).get("vix_level_pts")

@@ -79,7 +79,17 @@ price_cross_check:
 
 vix:
   # FRED history length (trading days) used for VIX-level percentile.
+  # Unlike IV rank, this doesn't have a sample-size problem to wait
+  # out -- FRED has decades of VIX history for free from day one.
   percentile_window_days: 252
+  # Below this many days of history actually returned, the percentile
+  # is suppressed rather than shown on a misleadingly thin sample
+  # (matters only if FRED itself has a data gap; not a day-one issue).
+  percentile_min_sample: 60
+  # Only used to size flag severity once the percentile is computed.
+  percentile_bands:
+    low: 25
+    high: 75
   # Flag prominently when VIX9D/VIX/VIX3M isn't in normal contango order
   # (vix9d <= vix <= vix3m) — a market-wide stress signal independent of
   # any single ticker's options chain.

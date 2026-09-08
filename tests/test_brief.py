@@ -25,7 +25,7 @@ CONFIG = {
     "dividends": {"blackout_days": 3},
     "calendar": {"blackout_days": 3},
     "positions": {"max_concurrent_positions": 10, "dte_window": [0, 7]},
-    "vix": {"flag_inversion": True},
+    "vix": {"flag_inversion": True, "percentile_bands": {"low": 25, "high": 75}},
     "delta_thresholds": {
         "dma_distance_pct": 3.0,
         "realized_vol_pts": 5.0,
@@ -228,6 +228,33 @@ def test_vix_inversion_flag_silent_when_normal():
     market = {"vix_term_structure": {"shape": "contango", "inverted": False}}
     flags = build_flags({}, market, None, CONFIG)
     assert not any(f.category == "vix_term_structure" for f in flags)
+
+
+def test_vix_percentile_flag_at_high_extreme():
+    market = {"vix_percentile": {"value": 88, "sufficient": True, "label": "252-day sample"}}
+    flags = build_flags({}, market, None, CONFIG)
+    pctl_flags = [f for f in flags if f.category == "vix_percentile"]
+    assert len(pctl_flags) == 1
+    assert "88" in pctl_flags[0].message
+    assert pctl_flags[0].ticker is None
+
+
+def test_vix_percentile_flag_at_low_extreme():
+    market = {"vix_percentile": {"value": 5, "sufficient": True, "label": "252-day sample"}}
+    flags = build_flags({}, market, None, CONFIG)
+    assert any(f.category == "vix_percentile" for f in flags)
+
+
+def test_vix_percentile_flag_silent_in_middle_band():
+    market = {"vix_percentile": {"value": 50, "sufficient": True, "label": "252-day sample"}}
+    flags = build_flags({}, market, None, CONFIG)
+    assert not any(f.category == "vix_percentile" for f in flags)
+
+
+def test_vix_percentile_flag_suppressed_when_insufficient():
+    market = {"vix_percentile": {"value": 88, "sufficient": False, "label": "unavailable"}}
+    flags = build_flags({}, market, None, CONFIG)
+    assert not any(f.category == "vix_percentile" for f in flags)
 
 
 def test_delta_flag_fires_above_threshold():

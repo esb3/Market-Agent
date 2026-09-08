@@ -20,7 +20,7 @@ CONFIG = {
     "iv_history": {"suppress_below_days": 20, "mature_sample_days": 126},
     "iv_rank_bands": {"low": 25, "high": 75},
     "price_cross_check": {"tolerance_pct": 0.01},
-    "vix": {"flag_inversion": True},
+    "vix": {"flag_inversion": True, "percentile_window_days": 252, "percentile_min_sample": 60, "percentile_bands": {"low": 25, "high": 75}},
     "earnings": {"blackout_days": 5, "nasdaq_search_radius_days": 3},
     "positions": {"max_concurrent_positions": 10, "dte_window": [0, 7], "staleness_days": 3},
     "calendar": {"macro_dates": [], "blackout_days": 3},
@@ -71,13 +71,14 @@ def make_nasdaq_client():
     return client
 
 
-def make_fred_client(complete=True):
+def make_fred_client(complete=True, history_length=300):
     client = Mock()
     obs = lambda v: SimpleNamespace(value=v)
     if complete:
         client.vix_complex.return_value = {"vix": obs(15.0), "vix9d": obs(14.0), "vix3m": obs(16.0), "tbill_3m": obs(5.0)}
     else:
         client.vix_complex.return_value = {"vix": obs(15.0)}
+    client.history.return_value = [obs(14.0 + (i % 5)) for i in range(history_length)]
     return client
 
 
@@ -264,6 +265,39 @@ def test_build_market_metrics_includes_macro_dates():
     deps = _deps(fred_client=make_fred_client(complete=True))
     market, notes = main.build_market_metrics(deps, config, TODAY)
     assert market["macro_dates"] == [{"label": "CPI", "days_to": 2}]
+
+
+def test_build_market_metrics_vix_percentile_computed_when_sufficient_history():
+    deps = _deps(fred_client=make_fred_client(complete=True, history_length=300))
+    market, notes = main.build_market_metrics(deps, CONFIG, TODAY)
+    assert market["vix_percentile"]["sufficient"] is True
+    assert 0 <= market["vix_percentile"]["value"] <= 100
+    assert not any("percentile suppressed" in n for n in notes)
+
+
+def test_build_market_metrics_vix_percentile_suppressed_on_thin_history():
+    config = dict(CONFIG, vix=dict(CONFIG["vix"], percentile_min_sample=100))
+    deps = _deps(fred_client=make_fred_client(complete=True, history_length=10))
+    market, notes = main.build_market_metrics(deps, config, TODAY)
+    assert "vix_percentile" not in market
+    assert any("VIX percentile suppressed" in n for n in notes)
+
+
+def test_build_market_metrics_vix_percentile_skipped_without_vix_level():
+    deps = _deps(fred_client=make_fred_client(complete=True))
+    deps.fred_client.vix_complex.return_value = {}  # FRED gave us nothing at all this run
+    market, notes = main.build_market_metrics(deps, CONFIG, TODAY)
+    assert "vix" not in market
+    assert "vix_percentile" not in market
+    deps.fred_client.history.assert_not_called()
+
+
+def test_build_market_metrics_vix_history_source_error_noted():
+    deps = _deps(fred_client=make_fred_client(complete=True))
+    deps.fred_client.history.side_effect = SourceUnavailable("rate limited")
+    market, notes = main.build_market_metrics(deps, CONFIG, TODAY)
+    assert "vix_percentile" not in market
+    assert any("VIX history unavailable" in n for n in notes)
 
 
 def test_build_market_metrics_partial_notes_incompleteness():
