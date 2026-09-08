@@ -13,14 +13,20 @@ fails the run loudly on any directional/recommendation language — see
 metrics that cross a threshold or moved materially since yesterday get
 surfaced, everything else rolls into one "N tickers nominal" line).
 
-## One-time setup
+## One-time setup (Windows)
 
-```bash
-cd /path/to/Market-Agent
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
+In PowerShell:
+
+```powershell
+cd C:\path\to\Market-Agent
+python -m venv .venv
+.venv\Scripts\pip.exe install -r requirements.txt
+Copy-Item .env.example .env
 ```
+
+(macOS/Linux equivalent, if this ever runs there instead:
+`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cp .env.example .env`
+— swap `.venv\Scripts\python.exe` for `.venv/bin/python` everywhere below too.)
 
 Edit `.env`:
 
@@ -48,19 +54,19 @@ flags.
 **Verify FRED series IDs once**, on this machine (not verifiable during
 this project's build — see `sources/fred.py`'s docstring):
 
-```bash
-.venv/bin/python scripts/verify_fred_series.py
+```powershell
+.venv\Scripts\python.exe scripts\verify_fred_series.py
 ```
 
 Fix `SERIES_IDS` in `sources/fred.py` if anything prints `FAIL`.
 
 ## Running it
 
-```bash
-.venv/bin/python main.py --dry-run          # prints the briefing, sends nothing
-.venv/bin/python main.py                    # sends the email
-.venv/bin/python main.py --force            # runs even on a non-trading day
-.venv/bin/python main.py --date 2026-09-08  # override "today", for testing
+```powershell
+.venv\Scripts\python.exe main.py --dry-run          # prints the briefing, sends nothing
+.venv\Scripts\python.exe main.py                    # sends the email
+.venv\Scripts\python.exe main.py --force            # runs even on a non-trading day
+.venv\Scripts\python.exe main.py --date 2026-09-08  # override "today", for testing
 ```
 
 IV history (needed for IV rank/percentile to mean anything — see
@@ -69,77 +75,101 @@ automatically as a side effect of `main.py`'s run, but also has its own
 independent entry point so it keeps accumulating even on a day the
 briefing itself fails:
 
-```bash
-.venv/bin/python snapshot.py
+```powershell
+.venv\Scripts\python.exe snapshot.py
 ```
 
 Run the test suite any time:
 
-```bash
-.venv/bin/python -m pytest
+```powershell
+.venv\Scripts\python.exe -m pytest
 ```
 
-## Scheduling (macOS launchd)
+## Scheduling (Windows Task Scheduler)
 
-Two plists in `launchd/`: the briefing (08:30 local, Mon–Fri) and the
-independent IV snapshot (07:00 local, Mon–Fri — see that plist's comment
-for why it's separate from the briefing run). Both fire every weekday;
-`main.py` itself checks `pandas_market_calendars` and exits quietly on
-US market holidays, so there's no holiday logic needed in launchd.
+Two wrapper scripts in `scripts/`: `run_briefing.bat` and
+`run_snapshot.bat`. Each `cd`s to the project root and calls the venv's
+own `python.exe` directly, so Task Scheduler's working directory and
+whatever `python` happens to resolve to on PATH don't matter. `main.py`
+itself checks `pandas_market_calendars` and exits quietly on US market
+holidays, so both tasks can just fire every weekday with no holiday
+logic in Task Scheduler.
 
-**1. Edit the paths.** Both plists have `/Users/YOUR_USERNAME/Market-Agent`
-placeholders — replace with your actual project path (4 places per file:
-the two `ProgramArguments` entries, `WorkingDirectory`, and the two log
-paths):
+**1. Create the two tasks**, from an ordinary (non-admin) PowerShell or
+Command Prompt — replace `C:\path\to\Market-Agent` with your actual
+project path in both commands:
 
-```bash
-sed -i '' "s|/Users/YOUR_USERNAME/Market-Agent|$(pwd)|g" launchd/com.marketagent.briefing.plist
-sed -i '' "s|/Users/YOUR_USERNAME/Market-Agent|$(pwd)|g" launchd/com.marketagent.snapshot.plist
+```cmd
+schtasks /create /tn "MarketAgent Briefing" /tr "\"C:\path\to\Market-Agent\scripts\run_briefing.bat\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 08:30
+schtasks /create /tn "MarketAgent Snapshot" /tr "\"C:\path\to\Market-Agent\scripts\run_snapshot.bat\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 07:00
 ```
 
-**2. Install and load them:**
+(The snapshot job runs earlier and separately from the briefing on
+purpose — IV history needs to keep accumulating even on a day the
+briefing itself fails, e.g. an LLM or SMTP outage. Both writers are
+idempotent per ticker/date, so it's harmless that `main.py` also writes
+today's snapshot itself while fetching option chains for the briefing.)
+
+This creates each task to run only while you're logged on, with no
+password stored — the simplest option for a personal machine. If you
+need it to run even when logged off, use `/ru` + `/rp` instead (stores
+your Windows password with the task) or configure "Run whether user is
+logged on or not" in the GUI (`taskschd.msc`).
+
+**2. Verify they're registered:**
+
+```cmd
+schtasks /query /tn "MarketAgent Briefing" /v /fo LIST
+schtasks /query /tn "MarketAgent Snapshot" /v /fo LIST
+```
+
+Check `Scheduled Task State: Enabled` and `Last Result: 0` after it's
+fired at least once (`267011` means "hasn't run yet," not a failure).
+
+**3. Test a task immediately** without waiting for its scheduled time:
+
+```cmd
+schtasks /run /tn "MarketAgent Briefing"
+```
+
+Nothing under this project writes its own Task-Scheduler-specific log
+file (unlike the launchd setup below) — check `logs\<date>.json` for
+the run's output and data quality notes, since that's written
+regardless of how the run was triggered.
+
+**4. Wake from sleep.** Task Scheduler won't run a task while the PC is
+asleep unless you enable it: open `taskschd.msc` → find the task →
+Properties → **Conditions** tab → check "Wake the computer to run this
+task." Without this, a run during sleep is simply skipped that day
+rather than deferred — `main.py` has no way to run retroactively for a
+missed morning.
+
+**To update or remove** a task after editing a `.bat` file (no need to
+recreate it — the `.bat` file is read fresh each run) or to delete one
+entirely:
+
+```cmd
+schtasks /delete /tn "MarketAgent Briefing" /f
+```
+
+### macOS (if this ever runs there instead)
+
+Two plists live in `launchd/` for reference — `com.marketagent.briefing.plist`
+(08:30 local) and `com.marketagent.snapshot.plist` (07:00 local), both
+Mon–Fri. Replace the `/Users/YOUR_USERNAME/Market-Agent` placeholders
+with the real project path, then:
 
 ```bash
-cp launchd/com.marketagent.briefing.plist launchd/com.marketagent.snapshot.plist ~/Library/LaunchAgents/
+cp launchd/*.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.marketagent.briefing.plist
 launchctl load ~/Library/LaunchAgents/com.marketagent.snapshot.plist
+launchctl list | grep marketagent   # verify
+launchctl start com.marketagent.briefing   # test immediately
 ```
 
-**3. Verify they're loaded:**
-
-```bash
-launchctl list | grep marketagent
-```
-
-Two rows should print, each with a PID column (usually `-` when idle,
-meaning loaded but not currently running) and a last-exit-status column
-(`0` after it has fired successfully at least once).
-
-**4. Test a job immediately** without waiting for its scheduled time:
-
-```bash
-launchctl start com.marketagent.briefing
-tail -f logs/launchd_briefing.log logs/launchd_briefing.err.log
-```
-
-**To stop/reload** after editing a plist:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.marketagent.briefing.plist
-# ...edit, then...
-launchctl load ~/Library/LaunchAgents/com.marketagent.briefing.plist
-```
-
-**Sleeping Mac:** launchd does not wake a sleeping machine by itself. If
-this Mac sleeps overnight, either wake it on a schedule:
-
-```bash
-sudo pmset repeat wakeorpoweron MTWRF 08:15:00
-```
-
-or accept that the job runs late (whenever the Mac next wakes) — `main.py`
-still checks the actual date, not "time since scheduled," so a late run
-still produces today's briefing rather than a stale one.
+launchd doesn't wake a sleeping Mac by itself either — `sudo pmset
+repeat wakeorpoweron MTWRF 08:15:00` is the equivalent of the Windows
+"wake to run" checkbox above.
 
 ## Architecture
 
@@ -154,7 +184,8 @@ metrics.py       pure functions, no I/O, fully unit tested
 brief.py         metrics -> flags -> LLM -> validator -> final text
 deliver.py       SMTP email
 main.py          orchestration, failure handling
-launchd/         macOS scheduling
+scripts/         Task Scheduler wrapper .bat files, FRED verification, demo
+launchd/         macOS scheduling (reference only -- see Scheduling section)
 data/positions/  your manual CSV exports (gitignored)
 logs/            per-run JSON: metrics, output, source disagreements (gitignored)
 ```
