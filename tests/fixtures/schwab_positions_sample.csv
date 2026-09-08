@@ -1,0 +1,10 @@
+"Positions for account XXXX-1234 as of 08:01 AM ET, 09/08/2026"
+
+"Symbol","Description","Quantity","Price","Price Change %","Price Change $","Market Value","Day Change %","Day Change $","Cost Basis","Cost Basis Per Share","Gain/Loss %","Gain/Loss $","Reinvest Dividends?","Reinvest Capital Gains?","% Of Account","Security Type"
+"AAPL","APPLE INC","100","$182.50","+1.20%","$2.16","$18,250.00","+1.20%","$216.00","$15,000.00","$150.00","+21.67%","$3,250.00","Yes","Yes","45.00%","Equity"
+"AAPL 09/18/2026 190.00 C","CALL APPLE INC $190 EXP 09/18/26","-2","$3.20","-5.00%","-$0.17","-$640.00","-5.00%","$34.00","-$500.00","$2.50","+28.00%","-$140.00","No","No","1.58%","Option"
+"AAPL 10/16/2026 170.00 P","PUT APPLE INC $170 EXP 10/16/26","3","$4.10","+2.00%","$0.08","$1,230.00","+2.00%","$24.00","$1,050.00","$3.50","+17.14%","$180.00","No","No","3.04%","Option"
+"SPY 09/12/2026 560.00 P","PUT SPDR S&P 500 ETF $560 EXP 09/12/26","-1","$2.85","-3.00%","-$0.09","-$285.00","-3.00%","$9.00","-$220.00","$2.20","+29.55%","$65.00","No","No","0.70%","Option"
+"Cash & Cash Investments","","","","","","$4,120.33","","","","","","","","","10.19%",""
+
+"Brokerage services are provided by Charles Schwab & Co., Inc. Data quoted represents past performance which is no guarantee of future results."
