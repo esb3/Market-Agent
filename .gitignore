@@ -11,4 +11,7 @@ data/positions/*
 *.sqlite
 *.sqlite3
 
+# yfinance_cache's on-disk cache (see sources/yfinance.configure_cache)
+.yfinance_cache/
+
 .DS_Store

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.marketagent.briefing</string>
+
+    <!-- EDIT: replace /Users/YOUR_USERNAME/Market-Agent with your actual
+         project path in every entry below (ProgramArguments,
+         WorkingDirectory, StandardOutPath, StandardErrorPath). -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Market-Agent/.venv/bin/python</string>
+        <string>/Users/YOUR_USERNAME/Market-Agent/main.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/Market-Agent</string>
+
+    <!-- Fires at 08:30 local time, Monday-Friday. launchd uses the
+         Mac's system clock/timezone; if this machine isn't set to US
+         Eastern, adjust Hour/Minute below to compensate. Weekday: 1=Mon
+         ... 5=Fri. main.py itself checks pandas_market_calendars and
+         exits quietly on holidays, so firing every weekday here (not
+         just trading days) is fine. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Market-Agent/logs/launchd_briefing.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Market-Agent/logs/launchd_briefing.err.log</string>
+
+    <!-- Doesn't wake a sleeping Mac by itself; see README for the
+         optional `pmset repeat wake` companion setting. -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

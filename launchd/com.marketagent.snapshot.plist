@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.marketagent.snapshot</string>
+
+    <!-- EDIT: replace /Users/YOUR_USERNAME/Market-Agent with your actual
+         project path in every entry below. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Market-Agent/.venv/bin/python</string>
+        <string>/Users/YOUR_USERNAME/Market-Agent/snapshot.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/Market-Agent</string>
+
+    <!-- Runs independently of the briefing job, on its own earlier
+         schedule (07:00 local, Mon-Fri); this is deliberate: IV
+         history must keep accumulating even on a day the briefing
+         itself fails to run (LLM outage, SMTP issue, etc). main.py
+         also writes today's IV snapshot as a side effect of fetching
+         option chains for the briefing, so this job is a redundant
+         safety net, not the only writer; both are idempotent per
+         (ticker, date), so running both on the same day is harmless. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Market-Agent/logs/launchd_snapshot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Market-Agent/logs/launchd_snapshot.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

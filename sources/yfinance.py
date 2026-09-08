@@ -103,20 +103,46 @@ class YFinanceClient:
         self._config = config
         self._ticker_factory = ticker_factory
 
+    def _wrap(self, ticker: str, fn, extra: str = ""):
+        """Runs `fn(ticker_like)` where `ticker_like` is freshly built by
+        `self._ticker_factory` on every call (including every retry) --
+        construction itself does network I/O (yfinance_cache fetches
+        exchange/timezone info immediately) and must be covered by the
+        same retry/backoff as the actual data call, not done once
+        up-front where a failure would go uncaught.
+
+        Converts YFRateLimitError AND any other exception to
+        SourceUnavailable: yfinance_cache's calls do network I/O via
+        curl_cffi or requests depending on what's installed, and can
+        raise either library's own connection/timeout exceptions, not
+        just YFRateLimitError. All of them get the same graceful
+        degradation (retry, then stale-cache fallback where
+        applicable); only the message notes which kind it was.
+        """
+
+        def call():
+            try:
+                t = self._ticker_factory(ticker)
+                return fn(t)
+            except YFRateLimitError as exc:
+                raise SourceUnavailable(f"yfinance {ticker}{extra}: rate limited: {exc}") from exc
+            except Exception as exc:
+                raise SourceUnavailable(f"yfinance {ticker}{extra}: {exc}") from exc
+
+        return call
+
     def daily_bars(self, ticker: str, lookback_days: int = 260) -> DailyBars:
-        t = self._ticker_factory(ticker)
         # Pad the fetch window for weekends/holidays so `lookback_days`
         # trading days actually come back.
         start = date.today() - timedelta(days=int(lookback_days * 1.6) + 10)
 
-        def call(max_age=None) -> pd.DataFrame:
+        def history_kwargs(max_age=None) -> dict:
             kwargs = {"start": start.isoformat(), "interval": "1d"}
             if max_age is not None:
                 kwargs["max_age"] = max_age
-            try:
-                return t.history(**kwargs)
-            except YFRateLimitError as exc:
-                raise SourceUnavailable(f"yfinance {ticker}: rate limited: {exc}") from exc
+            return kwargs
+
+        call = self._wrap(ticker, lambda t: t.history(**history_kwargs()))
 
         try:
             frame = with_retry(
@@ -129,21 +155,16 @@ class YFinanceClient:
         except SourceUnavailable:
             if not self._config.stale_fallback:
                 raise
-            frame = call(max_age=timedelta(days=36500))  # cache-only, any age
+            # cache-only, any age
+            stale_call = self._wrap(ticker, lambda t: t.history(**history_kwargs(max_age=timedelta(days=36500))))
+            frame = stale_call()
             stale = True
 
         _validate_daily_bars(frame, ticker)
         return DailyBars(frame=frame.tail(lookback_days), stale=stale)
 
     def list_expirations(self, ticker: str) -> List[date]:
-        t = self._ticker_factory(ticker)
-
-        def call():
-            try:
-                return t.options
-            except YFRateLimitError as exc:
-                raise SourceUnavailable(f"yfinance {ticker}: rate limited: {exc}") from exc
-
+        call = self._wrap(ticker, lambda t: t.options)
         raw = with_retry(
             call,
             max_retries=self._config.max_retries,
@@ -153,14 +174,7 @@ class YFinanceClient:
         return _validate_expirations(raw, ticker)
 
     def option_chain(self, ticker: str, expiry: date):
-        t = self._ticker_factory(ticker)
-
-        def call():
-            try:
-                return t.option_chain(expiry.isoformat())
-            except YFRateLimitError as exc:
-                raise SourceUnavailable(f"yfinance {ticker} {expiry}: rate limited: {exc}") from exc
-
+        call = self._wrap(ticker, lambda t: t.option_chain(expiry.isoformat()), extra=f" {expiry}")
         chain = with_retry(
             call,
             max_retries=self._config.max_retries,
@@ -171,14 +185,7 @@ class YFinanceClient:
         return chain
 
     def next_earnings_date(self, ticker: str, as_of: date) -> Optional[date]:
-        t = self._ticker_factory(ticker)
-
-        def call():
-            try:
-                return t.get_earnings_dates(as_of.isoformat())
-            except YFRateLimitError as exc:
-                raise SourceUnavailable(f"yfinance {ticker}: rate limited: {exc}") from exc
-
+        call = self._wrap(ticker, lambda t: t.get_earnings_dates(as_of.isoformat()))
         frame = with_retry(
             call,
             max_retries=self._config.max_retries,

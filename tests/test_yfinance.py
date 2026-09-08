@@ -105,6 +105,33 @@ def test_daily_bars_recovers_after_transient_rate_limit():
     assert mock_ticker.history.call_count == 2
 
 
+def test_daily_bars_degrades_gracefully_on_non_rate_limit_network_error():
+    # yfinance_cache's internal calls can raise other libraries' own
+    # connection errors (curl_cffi, requests), not just YFRateLimitError
+    # -- these must degrade the same way, not crash the run.
+    mock_ticker = Mock()
+    mock_ticker.history.side_effect = [ConnectionError("curl: (7) CONNECT tunnel failed"), valid_bars_frame()]
+    client = make_client(mock_ticker)
+
+    result = client.daily_bars("AAPL", lookback_days=10)
+    assert not result.stale
+    assert mock_ticker.history.call_count == 2
+
+
+def test_daily_bars_falls_back_to_stale_cache_on_persistent_non_rate_limit_error():
+    mock_ticker = Mock()
+    mock_ticker.history.side_effect = [
+        ConnectionError("network down"),
+        ConnectionError("network down"),
+        ConnectionError("network down"),
+        valid_bars_frame(),
+    ]
+    client = make_client(mock_ticker, stale_fallback=True)
+
+    result = client.daily_bars("AAPL", lookback_days=10)
+    assert result.stale
+
+
 def test_daily_bars_falls_back_to_stale_cache_after_persistent_rate_limit():
     mock_ticker = Mock()
     # 1 initial + 2 retries all rate-limited, then the stale-fallback
