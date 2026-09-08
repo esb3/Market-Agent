@@ -365,3 +365,60 @@ def test_run_briefing_prunes_logs_older_than_keep_days(tmp_path, monkeypatch):
 
     assert not old_log.exists()
     assert recent_log.exists()
+
+
+# ---------------------------------------------------------------------------
+# validate_config / load_config
+# ---------------------------------------------------------------------------
+
+FULL_CONFIG = dict(
+    CONFIG,
+    run={"time": "08:30", "timezone": "America/New_York"},
+    calendar={"macro_dates": []},
+    delivery={"smtp_host": "smtp.gmail.com", "smtp_port": 587, "smtp_use_tls": True, "from_address": "", "to_address": ""},
+)
+
+
+def test_validate_config_passes_for_complete_config():
+    main.validate_config(FULL_CONFIG)  # must not raise
+
+
+def test_validate_config_raises_naming_missing_section():
+    broken = dict(FULL_CONFIG)
+    del broken["earnings"]
+    with pytest.raises(main.ConfigError) as exc_info:
+        main.validate_config(broken)
+    assert "earnings" in str(exc_info.value)
+
+
+def test_validate_config_raises_on_non_mapping():
+    with pytest.raises(main.ConfigError):
+        main.validate_config(["not", "a", "dict"])
+
+
+def test_validate_config_raises_on_empty_tickers():
+    broken = dict(FULL_CONFIG, tickers=[])
+    with pytest.raises(main.ConfigError) as exc_info:
+        main.validate_config(broken)
+    assert "tickers" in str(exc_info.value)
+
+
+def test_load_config_valid_file(tmp_path):
+    import yaml
+
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.dump(FULL_CONFIG))
+    loaded = main.load_config(path)
+    assert loaded["tickers"] == ["AAPL"]
+
+
+def test_load_config_missing_section_raises_config_error(tmp_path):
+    import yaml
+
+    broken = dict(FULL_CONFIG)
+    del broken["briefing"]
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.dump(broken))
+    with pytest.raises(main.ConfigError) as exc_info:
+        main.load_config(path)
+    assert "briefing" in str(exc_info.value)

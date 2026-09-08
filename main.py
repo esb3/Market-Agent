@@ -19,7 +19,7 @@ Design principles this file exists to enforce:
 Run it directly for today's briefing:
 
     .venv/bin/python main.py             # sends the email
-    .venv/bin/python main.py --dry-run   # prints instead of sending
+    .venv/bin/python main.py --dry-run   # prints + writes logs/dry_run_preview.html instead of sending
     .venv/bin/python main.py --force     # runs even on a non-trading day
 """
 
@@ -75,9 +75,36 @@ class BriefingResult:
     subject: str
 
 
+class ConfigError(Exception):
+    """config.yaml is missing a required section, or is otherwise
+    unusable. Raised early, before any network calls, so a config
+    mistake (e.g. deleting a section while tuning thresholds) fails
+    fast with a clear message naming what's wrong, rather than a bare
+    KeyError surfacing from deep inside the pipeline."""
+
+
+REQUIRED_CONFIG_SECTIONS = [
+    "tickers", "run", "requests", "underlying", "options", "iv_history",
+    "iv_rank_bands", "price_cross_check", "vix", "earnings", "positions",
+    "calendar", "delta_thresholds", "briefing", "delivery", "logging",
+]
+
+
 def load_config(path: Path = ROOT / "config.yaml") -> dict:
     with open(path) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    validate_config(config)
+    return config
+
+
+def validate_config(config: dict) -> None:
+    if not isinstance(config, dict):
+        raise ConfigError("config.yaml did not parse to a mapping -- check for a syntax error")
+    missing = [s for s in REQUIRED_CONFIG_SECTIONS if s not in config]
+    if missing:
+        raise ConfigError(f"config.yaml is missing required section(s): {missing}")
+    if not config["tickers"]:
+        raise ConfigError("config.yaml: 'tickers' is empty -- add at least one underlying")
 
 
 def is_trading_day(d: date, calendar_name: str = "NYSE") -> bool:
@@ -509,28 +536,52 @@ def build_deps(config: dict) -> Deps:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Options morning briefing")
-    parser.add_argument("--dry-run", action="store_true", help="print the briefing instead of emailing it")
+    parser.add_argument("--dry-run", action="store_true", help="print the briefing and write an HTML preview instead of emailing it")
     parser.add_argument("--force", action="store_true", help="run even on a non-trading day")
     parser.add_argument("--date", type=str, default=None, help="override today's date (YYYY-MM-DD), for testing")
     args = parser.parse_args()
 
     load_dotenv(ROOT / ".env")
-    config = load_config()
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(f"Config error: {exc}")
+        raise SystemExit(1)
+
     today = date.fromisoformat(args.date) if args.date else date.today()
 
     if not args.force and not is_trading_day(today):
         print(f"{today.isoformat()} is not a trading day, skipping (use --force to override)")
         return
 
-    deps = build_deps(config)
+    try:
+        deps = build_deps(config)
+    except SourceUnavailable as exc:
+        # A missing API key or similarly broken setup, not a network
+        # flake -- fail with a clean message instead of a traceback.
+        print(f"Setup error: {exc}")
+        raise SystemExit(1)
+
     result = run_briefing(config, deps, today=today)
 
     if args.dry_run:
         print(result.text)
         print(f"\n[{len(result.text)} characters]")
+        preview_path = ROOT / "logs" / "dry_run_preview.html"
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        preview_path.write_text(result.html)
+        print(f"HTML preview written to {preview_path}")
         return
 
-    smtp_config = deliver.load_smtp_config(config, dict(os.environ))
+    try:
+        smtp_config = deliver.load_smtp_config(config, dict(os.environ))
+    except deliver.DeliveryError as exc:
+        print(f"Setup error: {exc}")
+        print("--- briefing text (not sent) ---")
+        print(result.text)
+        raise SystemExit(1)
+
     deliver.send_briefing(result.subject, result.text, smtp_config, html_body=result.html)
 
 

@@ -63,7 +63,7 @@ Fix `SERIES_IDS` in `sources/fred.py` if anything prints `FAIL`.
 ## Running it
 
 ```powershell
-.venv\Scripts\python.exe main.py --dry-run          # prints the briefing, sends nothing
+.venv\Scripts\python.exe main.py --dry-run          # prints the briefing + writes logs\dry_run_preview.html, sends nothing
 .venv\Scripts\python.exe main.py                    # sends the email
 .venv\Scripts\python.exe main.py --force            # runs even on a non-trading day
 .venv\Scripts\python.exe main.py --date 2026-09-08  # override "today", for testing
