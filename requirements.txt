@@ -1,0 +1,12 @@
+pandas
+numpy
+pyyaml
+python-dotenv
+pytest
+
+# added in later build steps:
+# yfinance
+# yfinance-cache
+# pandas_market_calendars
+# fredapi
+# anthropic

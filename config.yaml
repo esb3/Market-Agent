@@ -1,0 +1,130 @@
+# ============================================================
+# Options Morning Briefing — configuration
+#
+# Every numeric threshold below is a starting guess, not a
+# considered opinion. Each is commented with what raising or
+# lowering it does. Run the tool for a week on real output, then
+# tune. Nothing here needs to be right on day one.
+# ============================================================
+
+tickers:
+  # EDIT: replace with your actual underlyings. Keep this list small —
+  # the whole design (terse output, serialized requests) assumes it.
+  - SPY
+  - QQQ
+  - AAPL
+
+run:
+  # Local time the scheduled run targets (see launchd setup docs).
+  time: "08:30"
+  timezone: "America/New_York"
+  # Whole run gives up and sends partial output past this many seconds.
+  max_runtime_seconds: 300
+
+requests:
+  # Delay between per-ticker requests to any single source. Requests are
+  # always serialized, never parallel. Raise if you get rate-limited by
+  # Yahoo; lowering speeds up the run but risks a temporary IP block.
+  inter_request_delay_seconds: 1.5
+  timeout_seconds: 10
+  max_retries: 3
+  backoff_base_seconds: 2
+
+underlying:
+  atr_period: 14
+  dma_periods: [20, 50, 200]
+  range_window_days: 30
+  realized_vol_windows: [20, 30]
+  # Overnight gap size, in ATR units, that counts as "notable" and gets
+  # flagged. Lower = more gaps flagged (noisier); raise to quiet down a
+  # ticker that gaps a lot on ordinary days.
+  notable_gap_atr: 0.75
+
+options:
+  # A contract survives only if volume>0 OR open_interest>0.
+  min_volume_or_oi: 1
+  # Bid-ask spread wider than this fraction of the mid is dropped as
+  # untrustworthy. Raise for names where every contract is wide (you'll
+  # lose IV output less often, but trust it less); lower to demand
+  # tighter quotes.
+  max_spread_pct_of_mid: 0.15
+  # Minimum contracts surviving the filters above before IV output is
+  # trusted for that ticker that day; below this, IV is suppressed and
+  # the reason is stated.
+  min_surviving_contracts: 4
+  # Plausible ATM IV bounds (as a decimal, e.g. 0.05 = 5%). A computed IV
+  # outside this range is treated as a data error, not a real reading.
+  iv_sanity_bounds: [0.05, 3.0]
+
+iv_history:
+  # snapshot.py starts writing daily ATM IV immediately regardless of this.
+  # This is the sample size (trading days) below which IV rank/percentile
+  # is suppressed entirely rather than shown on a thin sample.
+  suppress_below_days: 20
+  # Sample size at or above which a reading is no longer labeled "thin".
+  # Between suppress_below_days and this, the number is shown but
+  # explicitly marked thin, e.g. "IV rank 82 (41-day sample — thin)".
+  mature_sample_days: 126  # ~6 months
+
+iv_rank_bands:
+  # Only used to size flag severity once IV rank is unsuppressed.
+  low: 25
+  high: 75
+
+price_cross_check:
+  # Fractional disagreement between Yahoo and Stooq closes beyond this is
+  # a data-quality flag, and derived metrics skip that bar rather than
+  # computing off a disputed close.
+  tolerance_pct: 0.01
+
+vix:
+  # FRED history length (trading days) used for VIX-level percentile.
+  percentile_window_days: 252
+  # Flag prominently when VIX9D/VIX/VIX3M isn't in normal contango order
+  # (vix9d <= vix <= vix3m) — a market-wide stress signal independent of
+  # any single ticker's options chain.
+  flag_inversion: true
+
+earnings:
+  # Days before an earnings date inside which a "near earnings" flag
+  # triggers for positions/new-exposure. Raise to widen the window.
+  blackout_days: 5
+
+positions:
+  max_concurrent_positions: 10
+  # DTE window (inclusive, days) that triggers an "approaching
+  # expiration" flag for an existing position.
+  dte_window: [0, 7]
+  # Age, in days, of the most recent CSV export in data/positions/ before
+  # the briefing adds a staleness warning. Position-aware flags still run
+  # on a stale file; only the warning is new.
+  staleness_days: 3
+
+calendar:
+  # Macro dates worth a calendar flag (FOMC, CPI, etc). EDIT freely.
+  # macro_dates:
+  #   - date: "2026-09-17"
+  #     label: "FOMC decision"
+  macro_dates: []
+
+briefing:
+  # Hard cap enforced in code (brief.py), and stated verbatim in the LLM
+  # prompt. Sized to fit a phone screen without scrolling.
+  max_characters: 600
+  # Flags are ranked by severity and truncated to this many.
+  max_flags: 8
+  llm_model: "claude-sonnet-4-6"
+  llm_temperature: 0
+
+delivery:
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  smtp_use_tls: true
+  # EDIT, or leave blank here and set BRIEFING_FROM_ADDRESS /
+  # BRIEFING_TO_ADDRESS / BRIEFING_SMTP_PASSWORD in .env instead.
+  from_address: ""
+  to_address: ""
+
+logging:
+  dir: "logs"
+  keep_days: 90
