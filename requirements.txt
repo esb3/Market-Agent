@@ -3,10 +3,10 @@ numpy
 pyyaml
 python-dotenv
 pytest
+requests
 
 # added in later build steps:
 # yfinance
 # yfinance-cache
 # pandas_market_calendars
-# fredapi
 # anthropic
