@@ -36,7 +36,7 @@ from __future__ import annotations
 import html
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence
 
 # ---------------------------------------------------------------------------
@@ -168,6 +168,16 @@ def _ticker_flags(ticker: str, m: dict, y: dict, positions_ctx: Optional[dict], 
             )
 
     out.extend(_delta_flags(ticker, m, y, config))
+
+    # Existing exposure in this ticker makes every other flag on it more
+    # personally relevant -- tag them rather than adding a whole extra
+    # line, which the terseness design would just have to truncate away.
+    # "expiration" flags already come from the position itself, and
+    # "concentration" is portfolio-wide, not ticker-specific -- neither
+    # needs the tag repeated.
+    if positions_ctx and ticker in positions_ctx.get("tickers_with_exposure", set()):
+        out = [f if f.category in ("expiration", "concentration") else replace(f, message=f"{f.message} [position]") for f in out]
+
     return out
 
 

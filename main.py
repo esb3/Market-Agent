@@ -428,9 +428,12 @@ def build_positions_context(
     }
     expiring_by_ticker = {k: v for k, v in expiring_by_ticker.items() if v}
 
+    tickers_with_exposure = {ticker for ticker in tickers if positions_mod.option_positions_for_ticker(snap, ticker)}
+
     ctx = {
         "expiring_by_ticker": expiring_by_ticker,
         "concurrent_option_position_count": positions_mod.concurrent_option_position_count(snap),
+        "tickers_with_exposure": tickers_with_exposure,
     }
     return ctx, notes
 

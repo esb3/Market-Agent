@@ -357,7 +357,19 @@ def test_build_positions_context_expiring_and_concentration(tmp_path):
     ctx, notes = main.build_positions_context(snap, ["AAPL"], TODAY, CONFIG)
     assert "AAPL" in ctx["expiring_by_ticker"]
     assert ctx["concurrent_option_position_count"] == 1
+    assert ctx["tickers_with_exposure"] == {"AAPL"}
     assert notes == []
+
+
+def test_build_positions_context_exposure_excludes_tickers_with_no_position(tmp_path):
+    csv_path = tmp_path / "positions_2026-09-08.csv"
+    csv_path.write_text(
+        '"Symbol","Description","Quantity","Security Type"\n'
+        f'"AAPL {(TODAY + timedelta(days=30)).strftime("%m/%d/%Y")} 190.00 C","CALL","-2","Option"\n'
+    )
+    snap = positions_mod.load_positions(csv_path)
+    ctx, notes = main.build_positions_context(snap, ["AAPL", "SPY", "QQQ"], TODAY, CONFIG)
+    assert ctx["tickers_with_exposure"] == {"AAPL"}  # not SPY or QQQ
 
 
 def test_build_positions_context_stale_note(tmp_path):

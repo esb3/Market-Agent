@@ -243,6 +243,49 @@ def test_expiration_flags_from_positions_context():
     assert "AAPL C 190.0 exp in 5d" == exp_flags[0].message
 
 
+def test_existing_exposure_tags_other_flags_on_that_ticker():
+    metrics = {"AAPL": {"gap_pct": 2.0, "gap_atr_units": 1.2}}
+    positions_ctx = {"tickers_with_exposure": {"AAPL"}}
+    flags = build_flags(metrics, {}, positions_ctx, CONFIG)
+    gap_flags = [f for f in flags if f.category == "gap"]
+    assert len(gap_flags) == 1
+    assert gap_flags[0].message.endswith("[position]")
+
+
+def test_no_exposure_tag_when_ticker_has_no_position():
+    metrics = {"AAPL": {"gap_pct": 2.0, "gap_atr_units": 1.2}}
+    positions_ctx = {"tickers_with_exposure": {"SPY"}}  # exposure in a different ticker
+    flags = build_flags(metrics, {}, positions_ctx, CONFIG)
+    gap_flags = [f for f in flags if f.category == "gap"]
+    assert "[position]" not in gap_flags[0].message
+
+
+def test_exposure_tag_not_duplicated_on_expiration_flag():
+    metrics = {"AAPL": {}}
+    positions_ctx = {
+        "expiring_by_ticker": {"AAPL": [{"option_type": "C", "strike": 190.0, "dte": 5}]},
+        "tickers_with_exposure": {"AAPL"},
+    }
+    flags = build_flags(metrics, {}, positions_ctx, CONFIG)
+    exp_flags = [f for f in flags if f.category == "expiration"]
+    assert "[position]" not in exp_flags[0].message  # already implies a position, redundant to tag
+
+
+def test_exposure_tag_not_applied_to_concentration_flag():
+    metrics = {"AAPL": {}}
+    positions_ctx = {"concurrent_option_position_count": 20, "tickers_with_exposure": {"AAPL"}}
+    flags = build_flags(metrics, {}, positions_ctx, CONFIG)
+    concentration_flags = [f for f in flags if f.category == "concentration"]
+    assert "[position]" not in concentration_flags[0].message  # portfolio-wide, not ticker-specific
+
+
+def test_no_exposure_tagging_without_positions_ctx():
+    metrics = {"AAPL": {"gap_pct": 2.0, "gap_atr_units": 1.2}}
+    flags = build_flags(metrics, {}, None, CONFIG)  # no positions file at all
+    gap_flags = [f for f in flags if f.category == "gap"]
+    assert "[position]" not in gap_flags[0].message
+
+
 def test_concentration_flag_fires_once_not_per_ticker():
     metrics = {"AAPL": {}, "SPY": {}}
     positions_ctx = {"concurrent_option_position_count": 12}
