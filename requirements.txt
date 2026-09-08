@@ -4,9 +4,9 @@ pyyaml
 python-dotenv
 pytest
 requests
+yfinance
+yfinance_cache
 
 # added in later build steps:
-# yfinance
-# yfinance-cache
 # pandas_market_calendars
 # anthropic

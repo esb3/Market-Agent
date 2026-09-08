@@ -89,6 +89,11 @@ earnings:
   # Days before an earnings date inside which a "near earnings" flag
   # triggers for positions/new-exposure. Raise to widen the window.
   blackout_days: 5
+  # How many days either side of yfinance's reported earnings date to
+  # check against Nasdaq's calendar (sources typically disagree by a
+  # day or two, not weeks). Raising this trades more Nasdaq requests
+  # for a wider net.
+  nasdaq_search_radius_days: 3
 
 positions:
   max_concurrent_positions: 10
