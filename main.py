@@ -86,7 +86,7 @@ class ConfigError(Exception):
 REQUIRED_CONFIG_SECTIONS = [
     "tickers", "run", "requests", "underlying", "options", "iv_history",
     "iv_rank_bands", "price_cross_check", "vix", "earnings", "positions",
-    "calendar", "delta_thresholds", "briefing", "delivery", "logging",
+    "calendar", "dividends", "delta_thresholds", "briefing", "delivery", "logging",
 ]
 
 
@@ -206,6 +206,7 @@ def fetch_ticker_data(
 
     _fetch_options_metrics(ticker, m, raw, notes, spot, deps, iv_conn, chain_config, config, today)
     _fetch_earnings_metrics(ticker, m, notes, deps, config, today)
+    _fetch_dividend_metrics(ticker, m, notes, deps, today)
 
     return m, raw, notes, disagreements
 
@@ -316,7 +317,18 @@ def _fetch_earnings_metrics(ticker: str, m: dict, notes: List[str], deps: Deps, 
         notes.append(f"{ticker}: earnings date {resolved.isoformat()} unconfirmed")
 
 
-def build_market_metrics(deps: Deps, config: dict) -> Tuple[dict, List[str]]:
+def _fetch_dividend_metrics(ticker: str, m: dict, notes: List[str], deps: Deps, today: date) -> None:
+    try:
+        ex_div_date = deps.yf_client.next_ex_dividend_date(ticker)
+    except SourceError as exc:
+        notes.append(_note(f"{ticker}: ex-dividend date unavailable", exc))
+        return
+    if ex_div_date is None:
+        return  # legitimately no scheduled dividend -- not every ticker pays one
+    m["days_to_ex_dividend"] = metrics.days_to(ex_div_date, today)
+
+
+def build_market_metrics(deps: Deps, config: dict, today: date) -> Tuple[dict, List[str]]:
     market: Dict[str, Any] = {}
     notes: List[str] = []
     try:
@@ -340,7 +352,29 @@ def build_market_metrics(deps: Deps, config: dict) -> Tuple[dict, List[str]]:
     if tbill is not None:
         market["risk_free_rate"] = tbill.value / 100
 
+    market["macro_dates"] = build_macro_dates(config, today=today)
+
     return market, notes
+
+
+def build_macro_dates(config: dict, today: date) -> List[dict]:
+    """Days-to for each config.calendar.macro_dates entry, future ones
+    only -- a macro date that already passed has nothing to flag.
+    Malformed entries (bad date string, missing keys) are skipped
+    rather than crashing the run; config.yaml is hand-edited, and a
+    typo there shouldn't take down the whole briefing."""
+    entries = config.get("calendar", {}).get("macro_dates") or []
+    result = []
+    for entry in entries:
+        try:
+            d = date.fromisoformat(str(entry["date"]))
+            label = str(entry["label"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        days_to = metrics.days_to(d, today)
+        if days_to is not None and days_to >= 0:
+            result.append({"label": label, "days_to": days_to})
+    return result
 
 
 def build_positions_context(
@@ -463,7 +497,7 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> Brie
         all_notes.extend(notes)
         all_disagreements.extend(disagreements)
 
-    market_metrics, market_notes = build_market_metrics(deps, config)
+    market_metrics, market_notes = build_market_metrics(deps, config, today)
     all_notes.extend(market_notes)
     iv_conn.close()
 

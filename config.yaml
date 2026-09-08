@@ -111,6 +111,15 @@ calendar:
   #   - date: "2026-09-17"
   #     label: "FOMC decision"
   macro_dates: []
+  # Days before a listed macro date inside which it gets flagged.
+  blackout_days: 3
+
+dividends:
+  # Days before an ex-dividend date inside which a flag triggers.
+  # Mainly a heads-up for early-assignment risk on short ITM calls;
+  # narrower than the earnings blackout since same-day/next-day is
+  # when it actually matters. Raise to get an earlier heads-up.
+  blackout_days: 3
 
 delta_thresholds:
   # Metrics below don't have a natural "breach" level, so they're only

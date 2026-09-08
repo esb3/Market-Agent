@@ -22,6 +22,8 @@ CONFIG = {
     "underlying": {"notable_gap_atr": 0.75},
     "iv_rank_bands": {"low": 25, "high": 75},
     "earnings": {"blackout_days": 5},
+    "dividends": {"blackout_days": 3},
+    "calendar": {"blackout_days": 3},
     "positions": {"max_concurrent_positions": 10, "dte_window": [0, 7]},
     "vix": {"flag_inversion": True},
     "delta_thresholds": {
@@ -155,6 +157,40 @@ def test_earnings_flag_silent_outside_blackout_window():
     metrics = {"AAPL": {"days_to_earnings": 30}}
     flags = build_flags(metrics, {}, None, CONFIG)
     assert not any(f.category == "earnings" for f in flags)
+
+
+def test_ex_dividend_flag_within_blackout():
+    metrics = {"AAPL": {"days_to_ex_dividend": 2}}
+    flags = build_flags(metrics, {}, None, CONFIG)
+    ex_div_flags = [f for f in flags if f.category == "ex_dividend"]
+    assert len(ex_div_flags) == 1
+    assert "2d" in ex_div_flags[0].message
+
+
+def test_ex_dividend_flag_silent_outside_blackout_window():
+    metrics = {"AAPL": {"days_to_ex_dividend": 20}}
+    flags = build_flags(metrics, {}, None, CONFIG)
+    assert not any(f.category == "ex_dividend" for f in flags)
+
+
+def test_macro_date_flag_within_blackout():
+    market = {"macro_dates": [{"label": "FOMC decision", "days_to": 1}]}
+    flags = build_flags({}, market, None, CONFIG)
+    macro_flags = [f for f in flags if f.category == "macro"]
+    assert len(macro_flags) == 1
+    assert macro_flags[0].message == "FOMC decision in 1d"
+    assert macro_flags[0].ticker is None
+
+
+def test_macro_date_flag_silent_outside_blackout_window():
+    market = {"macro_dates": [{"label": "FOMC decision", "days_to": 10}]}
+    flags = build_flags({}, market, None, CONFIG)
+    assert not any(f.category == "macro" for f in flags)
+
+
+def test_macro_date_flag_handles_empty_list():
+    flags = build_flags({}, {"macro_dates": []}, None, CONFIG)
+    assert not any(f.category == "macro" for f in flags)
 
 
 def test_expiration_flags_from_positions_context():

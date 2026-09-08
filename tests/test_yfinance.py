@@ -274,6 +274,67 @@ def test_next_earnings_date_non_dataframe_is_schema_error():
 
 
 # ---------------------------------------------------------------------------
+# next_ex_dividend_date
+# ---------------------------------------------------------------------------
+
+
+def test_next_ex_dividend_date_happy_path():
+    mock_ticker = Mock()
+    mock_ticker.calendar = {"Dividend Date": date(2026, 9, 20), "Ex-Dividend Date": date(2026, 9, 12)}
+    client = make_client(mock_ticker)
+    assert client.next_ex_dividend_date("AAPL") == date(2026, 9, 12)
+
+
+def test_next_ex_dividend_date_none_when_calendar_empty():
+    mock_ticker = Mock()
+    mock_ticker.calendar = None  # yfinance_cache returns None, not {}, when nothing scheduled
+    client = make_client(mock_ticker)
+    assert client.next_ex_dividend_date("AAPL") is None
+
+
+def test_next_ex_dividend_date_none_when_key_absent():
+    mock_ticker = Mock()
+    mock_ticker.calendar = {"Earnings Date": [date(2026, 10, 1)]}  # no dividend data for this ticker
+    client = make_client(mock_ticker)
+    assert client.next_ex_dividend_date("AAPL") is None
+
+
+def test_next_ex_dividend_date_string_date_is_parsed():
+    mock_ticker = Mock()
+    mock_ticker.calendar = {"Ex-Dividend Date": "2026-09-12"}
+    client = make_client(mock_ticker)
+    assert client.next_ex_dividend_date("AAPL") == date(2026, 9, 12)
+
+
+def test_next_ex_dividend_date_non_dict_is_schema_error():
+    mock_ticker = Mock()
+    mock_ticker.calendar = "not a dict"
+    client = make_client(mock_ticker)
+    with pytest.raises(SchemaError):
+        client.next_ex_dividend_date("AAPL")
+
+
+def test_next_ex_dividend_date_unparseable_value_is_schema_error():
+    mock_ticker = Mock()
+    mock_ticker.calendar = {"Ex-Dividend Date": "not-a-date"}
+    client = make_client(mock_ticker)
+    with pytest.raises(SchemaError):
+        client.next_ex_dividend_date("AAPL")
+
+
+def test_next_ex_dividend_date_rate_limit_retries():
+    # Mock doesn't support raising from a plain attribute access, so
+    # exercise the retry via a PropertyMock on .calendar instead.
+    from unittest.mock import PropertyMock
+
+    good_calendar = {"Ex-Dividend Date": date(2026, 9, 12)}
+    mock_ticker = Mock()
+    type(mock_ticker).calendar = PropertyMock(side_effect=[YFRateLimitError(), good_calendar])
+    client = make_client(mock_ticker)
+    assert client.next_ex_dividend_date("AAPL") == date(2026, 9, 12)
+
+
+# ---------------------------------------------------------------------------
 # configure_cache
 # ---------------------------------------------------------------------------
 

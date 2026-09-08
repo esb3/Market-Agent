@@ -118,6 +118,17 @@ def _ticker_flags(ticker: str, m: dict, y: dict, positions_ctx: Optional[dict], 
             )
         )
 
+    days_to_ex_div = m.get("days_to_ex_dividend")
+    if days_to_ex_div is not None and 0 <= days_to_ex_div <= config["dividends"]["blackout_days"]:
+        out.append(
+            Flag(
+                severity=55,
+                category="ex_dividend",
+                ticker=ticker,
+                message=f"{ticker} ex-dividend in {days_to_ex_div}d",
+            )
+        )
+
     if positions_ctx:
         for exp in positions_ctx.get("expiring_by_ticker", {}).get(ticker, []):
             out.append(
@@ -207,6 +218,21 @@ def _market_flags(market_metrics: dict, config: dict) -> List[Flag]:
                     message=f"VIX {vix:.1f} (Δ{delta:+.1f} vs yesterday)",
                 )
             )
+
+    blackout_days = config.get("calendar", {}).get("blackout_days")
+    for entry in market_metrics.get("macro_dates", []):
+        days_to = entry.get("days_to")
+        if days_to is None or blackout_days is None or days_to > blackout_days:
+            continue
+        out.append(
+            Flag(
+                severity=70,
+                category="macro",
+                ticker=None,
+                message=f"{entry.get('label', 'macro event')} in {days_to}d",
+            )
+        )
+
     return out
 
 

@@ -57,6 +57,7 @@ class TickerLike(Protocol):
     def option_chain(self, expiry_date, max_age=None): ...
     def get_earnings_dates(self, start): ...
     options: tuple
+    calendar: dict
 
 
 def configure_cache(path: Path) -> None:
@@ -194,6 +195,22 @@ class YFinanceClient:
         )
         return _next_earnings_date_from_frame(frame, ticker, as_of)
 
+    def next_ex_dividend_date(self, ticker: str) -> Optional[date]:
+        """None both when the ticker has no scheduled ex-dividend date
+        (many growth stocks legitimately don't) and when Yahoo has no
+        calendar data at all for it — that's a real absence, not a
+        SchemaError. A SchemaError is only raised if calendar data
+        exists but isn't shaped as expected (see
+        `_ex_dividend_date_from_calendar`)."""
+        call = self._wrap(ticker, lambda t: t.calendar)
+        cal = with_retry(
+            call,
+            max_retries=self._config.max_retries,
+            backoff_base=self._config.backoff_base_seconds,
+            retry_on=(SourceUnavailable,),
+        )
+        return _ex_dividend_date_from_calendar(cal, ticker)
+
 
 # ---------------------------------------------------------------------------
 # Schema validation — pure functions, unit-tested without yfinance/network.
@@ -248,3 +265,22 @@ def _next_earnings_date_from_frame(frame: pd.DataFrame, ticker: str, as_of: date
         raise SchemaError(f"yfinance {ticker}: earnings dates index is not date-like") from exc
     upcoming = sorted(d for d in idx.date if d >= as_of)
     return upcoming[0] if upcoming else None
+
+
+def _ex_dividend_date_from_calendar(cal, ticker: str) -> Optional[date]:
+    # Confirmed against yfinance's Quote._fetch_calendar(): the key is
+    # exactly "Ex-Dividend Date", holding a datetime.date, present only
+    # when Yahoo has one scheduled -- absence is normal, not an error.
+    if cal is None:
+        return None
+    if not isinstance(cal, dict):
+        raise SchemaError(f"yfinance {ticker}: calendar is not a dict: {type(cal)!r}")
+    ex_div = cal.get("Ex-Dividend Date")
+    if ex_div is None:
+        return None
+    if isinstance(ex_div, date):
+        return ex_div
+    try:
+        return date.fromisoformat(str(ex_div))
+    except ValueError as exc:
+        raise SchemaError(f"yfinance {ticker}: unparseable Ex-Dividend Date {ex_div!r}") from exc

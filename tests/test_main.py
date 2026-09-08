@@ -23,6 +23,8 @@ CONFIG = {
     "vix": {"flag_inversion": True},
     "earnings": {"blackout_days": 5, "nasdaq_search_radius_days": 3},
     "positions": {"max_concurrent_positions": 10, "dte_window": [0, 7], "staleness_days": 3},
+    "calendar": {"macro_dates": [], "blackout_days": 3},
+    "dividends": {"blackout_days": 3},
     "delta_thresholds": {"dma_distance_pct": 3.0, "realized_vol_pts": 5.0, "iv_minus_rv_pts": 5.0, "term_structure_slope_pts": 2.0, "range_percentile_pts": 25.0, "vix_level_pts": 2.0},
     "briefing": {"max_characters": 600, "max_flags": 8, "llm_model": "claude-sonnet-4-6", "llm_temperature": 0},
     "logging": {"dir": "logs", "keep_days": 90},
@@ -53,6 +55,7 @@ def make_yf_client(spot=150.0, iv=0.24, rate_limited=False):
     frame = _option_frame([spot - 5, spot, spot + 5], iv=iv)
     client.option_chain.return_value = SimpleNamespace(calls=frame, puts=frame)
     client.next_earnings_date.return_value = None
+    client.next_ex_dividend_date.return_value = None
     return client
 
 
@@ -177,6 +180,70 @@ def test_fetch_ticker_data_earnings_flows_through(tmp_path):
     assert m["earnings_unconfirmed"] is True  # nasdaq mock returns False for every date -> unconfirmed
 
 
+def test_fetch_ticker_data_ex_dividend_flows_through(tmp_path):
+    conn = __import__("snapshot").open_store(tmp_path / "iv.sqlite3")
+    yf_client = make_yf_client()
+    yf_client.next_ex_dividend_date.return_value = TODAY + timedelta(days=2)
+    deps = _deps(yf_client=yf_client)
+    m, raw, notes, disagreements = main.fetch_ticker_data(
+        "AAPL", deps=deps, iv_conn=conn, chain_config=CHAIN_CONFIG, config=CONFIG, today=TODAY
+    )
+    assert m["days_to_ex_dividend"] == 2
+
+
+def test_fetch_ticker_data_no_ex_dividend_is_not_an_error(tmp_path):
+    conn = __import__("snapshot").open_store(tmp_path / "iv.sqlite3")
+    deps = _deps()  # make_yf_client defaults next_ex_dividend_date to None
+    m, raw, notes, disagreements = main.fetch_ticker_data(
+        "AAPL", deps=deps, iv_conn=conn, chain_config=CHAIN_CONFIG, config=CONFIG, today=TODAY
+    )
+    assert "days_to_ex_dividend" not in m
+    assert not any("ex-dividend" in n for n in notes)
+
+
+def test_fetch_ticker_data_ex_dividend_source_error_noted(tmp_path):
+    conn = __import__("snapshot").open_store(tmp_path / "iv.sqlite3")
+    yf_client = make_yf_client()
+    yf_client.next_ex_dividend_date.side_effect = SourceUnavailable("rate limited")
+    deps = _deps(yf_client=yf_client)
+    m, raw, notes, disagreements = main.fetch_ticker_data(
+        "AAPL", deps=deps, iv_conn=conn, chain_config=CHAIN_CONFIG, config=CONFIG, today=TODAY
+    )
+    assert "days_to_ex_dividend" not in m
+    assert any("ex-dividend date unavailable" in n for n in notes)
+
+
+# ---------------------------------------------------------------------------
+# build_macro_dates
+# ---------------------------------------------------------------------------
+
+
+def test_build_macro_dates_computes_days_to():
+    config = dict(CONFIG, calendar={"macro_dates": [{"date": "2026-09-17", "label": "FOMC decision"}], "blackout_days": 3})
+    result = main.build_macro_dates(config, today=TODAY)
+    assert result == [{"label": "FOMC decision", "days_to": 9}]
+
+
+def test_build_macro_dates_drops_past_dates():
+    config = dict(CONFIG, calendar={"macro_dates": [{"date": "2026-01-01", "label": "old news"}], "blackout_days": 3})
+    result = main.build_macro_dates(config, today=TODAY)
+    assert result == []
+
+
+def test_build_macro_dates_skips_malformed_entries_without_crashing():
+    config = dict(
+        CONFIG,
+        calendar={"macro_dates": [{"date": "not-a-date", "label": "bad"}, {"label": "missing date"}], "blackout_days": 3},
+    )
+    result = main.build_macro_dates(config, today=TODAY)
+    assert result == []
+
+
+def test_build_macro_dates_empty_list_default():
+    config = dict(CONFIG, calendar={"macro_dates": [], "blackout_days": 3})
+    assert main.build_macro_dates(config, today=TODAY) == []
+
+
 # ---------------------------------------------------------------------------
 # build_market_metrics
 # ---------------------------------------------------------------------------
@@ -184,16 +251,24 @@ def test_fetch_ticker_data_earnings_flows_through(tmp_path):
 
 def test_build_market_metrics_complete():
     deps = _deps(fred_client=make_fred_client(complete=True))
-    market, notes = main.build_market_metrics(deps, CONFIG)
+    market, notes = main.build_market_metrics(deps, CONFIG, TODAY)
     assert market["vix"] == pytest.approx(15.0)
     assert "vix_term_structure" in market
     assert market["risk_free_rate"] == pytest.approx(0.05)
+    assert market["macro_dates"] == []  # CONFIG's fixture has none configured
     assert notes == []
+
+
+def test_build_market_metrics_includes_macro_dates():
+    config = dict(CONFIG, calendar={"macro_dates": [{"date": "2026-09-10", "label": "CPI"}], "blackout_days": 3})
+    deps = _deps(fred_client=make_fred_client(complete=True))
+    market, notes = main.build_market_metrics(deps, config, TODAY)
+    assert market["macro_dates"] == [{"label": "CPI", "days_to": 2}]
 
 
 def test_build_market_metrics_partial_notes_incompleteness():
     deps = _deps(fred_client=make_fred_client(complete=False))
-    market, notes = main.build_market_metrics(deps, CONFIG)
+    market, notes = main.build_market_metrics(deps, CONFIG, TODAY)
     assert "vix_term_structure" not in market
     assert any("incomplete" in n for n in notes)
 
@@ -201,7 +276,7 @@ def test_build_market_metrics_partial_notes_incompleteness():
 def test_build_market_metrics_schema_error_is_noted_not_raised():
     deps = _deps()
     deps.fred_client.vix_complex.side_effect = SchemaError("bad series id")
-    market, notes = main.build_market_metrics(deps, CONFIG)
+    market, notes = main.build_market_metrics(deps, CONFIG, TODAY)
     assert any("SCHEMA ERROR" in n for n in notes)
 
 
@@ -374,7 +449,6 @@ def test_run_briefing_prunes_logs_older_than_keep_days(tmp_path, monkeypatch):
 FULL_CONFIG = dict(
     CONFIG,
     run={"time": "08:30", "timezone": "America/New_York"},
-    calendar={"macro_dates": []},
     delivery={"smtp_host": "smtp.gmail.com", "smtp_port": 587, "smtp_use_tls": True, "from_address": "", "to_address": ""},
 )
 
