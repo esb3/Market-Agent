@@ -9,6 +9,7 @@ from brief import (
     Flag,
     build_data_quality_notes,
     build_flags,
+    build_html_briefing,
     build_payload,
     format_fallback,
     generate_and_validate,
@@ -354,3 +355,129 @@ def test_generate_and_validate_raises_on_over_cap_response():
     payload = {"flags": [], "nominal": [], "data_quality_notes": []}
     with pytest.raises(BriefingValidationError):
         generate_and_validate(payload, CONFIG, client=client)
+
+
+# ---------------------------------------------------------------------------
+# generate_and_validate retry-with-correction
+# ---------------------------------------------------------------------------
+
+
+def _fake_client_sequence(*texts: str):
+    client = Mock()
+    client.messages.create.side_effect = [
+        SimpleNamespace(content=[SimpleNamespace(type="text", text=t)]) for t in texts
+    ]
+    return client
+
+
+def test_generate_and_validate_retries_after_bad_first_attempt():
+    client = _fake_client_sequence("this looks bullish", "AAPL gap +2.1%\n3 tickers nominal")
+    payload = {"flags": [], "nominal": [], "data_quality_notes": []}
+    text = generate_and_validate(payload, CONFIG, client=client, max_attempts=2)
+    assert text == "AAPL gap +2.1%\n3 tickers nominal"
+    assert client.messages.create.call_count == 2
+
+
+def test_generate_and_validate_retry_sends_corrective_followup():
+    client = _fake_client_sequence("this looks bullish", "AAPL gap +2.1%")
+    payload = {"flags": [], "nominal": [], "data_quality_notes": []}
+    generate_and_validate(payload, CONFIG, client=client, max_attempts=2)
+    second_call_messages = client.messages.create.call_args_list[1].kwargs["messages"]
+    assert len(second_call_messages) == 3  # original user turn, bad assistant reply, correction
+    assert second_call_messages[1]["role"] == "assistant"
+    assert "bullish" in second_call_messages[1]["content"]
+    assert second_call_messages[2]["role"] == "user"
+    assert "violated" in second_call_messages[2]["content"]
+
+
+def test_generate_and_validate_raises_after_exhausting_all_attempts():
+    client = _fake_client_sequence("bullish one", "bearish two", "poised three")
+    payload = {"flags": [], "nominal": [], "data_quality_notes": []}
+    with pytest.raises(BriefingValidationError):
+        generate_and_validate(payload, CONFIG, client=client, max_attempts=3)
+    assert client.messages.create.call_count == 3
+
+
+def test_generate_and_validate_single_attempt_when_max_attempts_is_one():
+    client = _fake_client_sequence("this looks bullish")
+    payload = {"flags": [], "nominal": [], "data_quality_notes": []}
+    with pytest.raises(BriefingValidationError):
+        generate_and_validate(payload, CONFIG, client=client, max_attempts=1)
+    assert client.messages.create.call_count == 1
+
+
+def test_generate_and_validate_no_retry_needed_on_first_success():
+    client = _fake_client_sequence("AAPL gap +2.1%\n3 tickers nominal")
+    payload = {"flags": [], "nominal": [], "data_quality_notes": []}
+    text = generate_and_validate(payload, CONFIG, client=client, max_attempts=2)
+    assert text == "AAPL gap +2.1%\n3 tickers nominal"
+    assert client.messages.create.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# build_html_briefing
+# ---------------------------------------------------------------------------
+
+
+def test_build_html_briefing_contains_flag_messages():
+    payload = {
+        "flags": [{"severity": 90, "category": "vix_term_structure", "ticker": None, "message": "VIX inverted"}],
+        "nominal": ["SPY"],
+        "data_quality_notes": ["QQQ: IV unavailable"],
+    }
+    result = build_html_briefing(payload, subject="Options briefing — 2026-09-08")
+    assert "VIX inverted" in result
+    assert "1 tickers nominal" in result
+    assert "QQQ: IV unavailable" in result
+    assert "Options briefing" in result
+    assert "<html" in result and "</html>" in result
+
+
+def test_build_html_briefing_escapes_html_special_characters():
+    payload = {
+        "flags": [{"severity": 70, "category": "gap", "ticker": "AAPL", "message": "AAPL <script>alert(1)</script> & co"}],
+        "nominal": [],
+        "data_quality_notes": [],
+    }
+    result = build_html_briefing(payload)
+    assert "<script>" not in result
+    assert "&lt;script&gt;" in result
+    assert "&amp; co" in result
+
+
+def test_build_html_briefing_severity_color_tiers():
+    payload = {
+        "flags": [
+            {"severity": 90, "category": "a", "ticker": None, "message": "high severity"},
+            {"severity": 60, "category": "b", "ticker": None, "message": "medium severity"},
+            {"severity": 20, "category": "c", "ticker": None, "message": "low severity"},
+        ],
+        "nominal": [],
+        "data_quality_notes": [],
+    }
+    result = build_html_briefing(payload)
+    assert brief._HTML_COLORS["high"] in result
+    assert brief._HTML_COLORS["med"] in result
+    assert brief._HTML_COLORS["low"] in result
+
+
+def test_build_html_briefing_empty_payload_still_renders():
+    payload = {"flags": [], "nominal": [], "data_quality_notes": []}
+    result = build_html_briefing(payload)
+    assert "nothing to report" in result
+    assert "<html" in result
+
+
+def test_build_html_briefing_never_touched_by_llm():
+    # The HTML rendering is built only from code-generated Flag messages
+    # -- passing text that would fail the validator straight through as
+    # a flag message must not raise or get filtered; it just proves the
+    # HTML builder has no validator step of its own (by design: nothing
+    # here ever came from an LLM, so nothing needs validating).
+    payload = {
+        "flags": [{"severity": 70, "category": "gap", "ticker": "AAPL", "message": "this literally says bullish"}],
+        "nominal": [],
+        "data_quality_notes": [],
+    }
+    result = build_html_briefing(payload)  # must not raise
+    assert "bullish" in result

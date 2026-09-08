@@ -33,6 +33,7 @@ sentence mid-word.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -375,17 +376,25 @@ covered by a flag above.
 section."""
 
 
+def _resolve_client(client: Any) -> Any:
+    if client is not None:
+        return client
+    import anthropic
+
+    return anthropic.Anthropic()
+
+
+def _extract_text(response: Any) -> str:
+    return "".join(block.text for block in response.content if getattr(block, "type", None) == "text").strip()
+
+
 def generate_briefing(payload: dict, config: dict, client: Any = None) -> str:
-    """`client`: an injected Anthropic-SDK-shaped client for testing
-    (must expose .messages.create(...) -> response with .content, each
-    item having .type and .text). Defaults to a real
-    anthropic.Anthropic() reading ANTHROPIC_API_KEY from the
+    """One LLM call, no retry. `client`: an injected Anthropic-SDK-shaped
+    client for testing (must expose .messages.create(...) -> response
+    with .content, each item having .type and .text). Defaults to a
+    real anthropic.Anthropic() reading ANTHROPIC_API_KEY from the
     environment."""
-    if client is None:
-        import anthropic
-
-        client = anthropic.Anthropic()
-
+    client = _resolve_client(client)
     max_characters = config["briefing"]["max_characters"]
     response = client.messages.create(
         model=config["briefing"]["llm_model"],
@@ -394,17 +403,50 @@ def generate_briefing(payload: dict, config: dict, client: Any = None) -> str:
         system=SYSTEM_PROMPT_TEMPLATE.format(max_characters=max_characters),
         messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
     )
-    return "".join(block.text for block in response.content if getattr(block, "type", None) == "text").strip()
+    return _extract_text(response)
 
 
-def generate_and_validate(payload: dict, config: dict, client: Any = None) -> str:
-    """Raises BriefingValidationError on forbidden language or an
-    over-cap response; raises whatever the client raises on an API
-    failure. Either way, callers should fall back to
+def generate_and_validate(payload: dict, config: dict, client: Any = None, max_attempts: int = 2) -> str:
+    """Calls the LLM and validates its response, retrying with a
+    corrective follow-up turn (not a blind re-send — at temperature 0 a
+    plain retry would just reproduce the same violation) up to
+    `max_attempts` times before giving up. Raises BriefingValidationError
+    if every attempt fails validation, or whatever the client raises on
+    an API failure. Either way, callers should fall back to
     format_fallback()."""
-    text = generate_briefing(payload, config, client=client)
-    validate_briefing_text(text, config["briefing"]["max_characters"])
-    return text
+    client = _resolve_client(client)
+    max_characters = config["briefing"]["max_characters"]
+    messages: List[dict] = [{"role": "user", "content": json.dumps(payload, default=str)}]
+
+    for attempt in range(1, max_attempts + 1):
+        response = client.messages.create(
+            model=config["briefing"]["llm_model"],
+            max_tokens=1024,
+            temperature=config["briefing"]["llm_temperature"],
+            system=SYSTEM_PROMPT_TEMPLATE.format(max_characters=max_characters),
+            messages=messages,
+        )
+        text = _extract_text(response)
+        try:
+            validate_briefing_text(text, max_characters)
+            return text
+        except BriefingValidationError as exc:
+            if attempt >= max_attempts:
+                raise
+            messages.append({"role": "assistant", "content": text})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"That response violated the rules in the system prompt: {exc}. "
+                        "Regenerate from scratch, following the system prompt exactly — "
+                        "no directional or recommendation language, "
+                        f"{max_characters} characters or fewer total."
+                    ),
+                }
+            )
+
+    raise AssertionError("unreachable")  # loop always returns or raises
 
 
 # ---------------------------------------------------------------------------
@@ -430,3 +472,103 @@ def format_fallback(payload: dict, config: dict) -> str:
     if len(text) > max_characters:
         text = text[:max_characters]
     return text
+
+
+# ---------------------------------------------------------------------------
+# HTML rendering — a second, always-safe view of the same payload.
+# ---------------------------------------------------------------------------
+
+_SEVERITY_HIGH = 80
+_SEVERITY_MED = 50
+
+_HTML_COLORS = {
+    "bg": "#F6F1E7",
+    "surface": "#FFFFFF",
+    "border": "#E2D9C4",
+    "text": "#221D14",
+    "text_dim": "#6E6552",
+    "accent": "#A9781A",
+    "high": "#B14A3B",
+    "med": "#A9781A",
+    "low": "#4C7A63",
+}
+_MONO_STACK = "Menlo,Consolas,'SF Mono',monospace"
+
+
+def _severity_color(severity: int) -> str:
+    if severity >= _SEVERITY_HIGH:
+        return _HTML_COLORS["high"]
+    if severity >= _SEVERITY_MED:
+        return _HTML_COLORS["med"]
+    return _HTML_COLORS["low"]
+
+
+def build_html_briefing(payload: dict, subject: str = "") -> str:
+    """Deterministic HTML rendering of `payload`, built directly from
+    each Flag's code-generated `message` field — never LLM text. This
+    half of the delivered email carries the same safety guarantee as
+    format_fallback(): it cannot contain a recommendation, because no
+    LLM ever touches it, regardless of whether the plain-text part
+    (sent alongside it, see deliver.py) came from a successful LLM call
+    or the fallback. Table-based, inline-styled throughout — plain CSS
+    and modern layout aren't reliably supported across mail clients.
+    """
+    c = _HTML_COLORS
+    flag_rows = []
+    for f in payload["flags"]:
+        color = _severity_color(f["severity"])
+        message = html.escape(f["message"])
+        flag_rows.append(
+            f'<tr><td style="width:4px;background:{color};font-size:0;line-height:0;">&nbsp;</td>'
+            f'<td style="padding:9px 0 9px 12px;font-family:{_MONO_STACK};'
+            f'font-size:13.5px;line-height:1.5;color:{c["text"]};">{message}</td></tr>'
+        )
+    if payload.get("nominal"):
+        note = html.escape(f"{len(payload['nominal'])} tickers nominal")
+        flag_rows.append(
+            '<tr><td style="width:4px;"></td>'
+            f'<td style="padding:9px 0 9px 12px;font-family:{_MONO_STACK};'
+            f'font-size:13.5px;line-height:1.5;color:{c["text_dim"]};">{note}</td></tr>'
+        )
+    flags_table = "".join(flag_rows) or (
+        f'<tr><td style="padding:9px 0;font-family:{_MONO_STACK};font-size:13.5px;'
+        f'color:{c["text_dim"]};">nothing to report</td></tr>'
+    )
+
+    dq_section = ""
+    dq_notes = payload.get("data_quality_notes", [])
+    if dq_notes:
+        dq_rows = "".join(
+            f'<tr><td style="padding:4px 0;font-family:{_MONO_STACK};font-size:12px;'
+            f'line-height:1.5;color:{c["text_dim"]};">{html.escape(note)}</td></tr>'
+            for note in dq_notes
+        )
+        dq_section = (
+            f'<tr><td style="padding:14px 18px 18px;border-top:1px solid {c["border"]};">'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{dq_rows}</table>'
+            "</td></tr>"
+        )
+
+    subject_html = html.escape(subject)
+
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:{c['bg']};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{c['bg']};">
+<tr><td align="center" style="padding:24px 16px;">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:{c['surface']};border:1px solid {c['border']};border-radius:8px;">
+<tr><td style="padding:16px 18px 4px;font-family:{_MONO_STACK};font-size:11px;letter-spacing:.06em;color:{c['accent']};text-transform:uppercase;">{subject_html}</td></tr>
+<tr><td style="padding:6px 14px 14px 18px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{flags_table}</table>
+</td></tr>
+{dq_section}
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""

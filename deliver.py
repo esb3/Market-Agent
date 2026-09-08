@@ -1,18 +1,22 @@
 """SMTP email delivery.
 
-Sends the finished briefing text as a plain-text email. No retry logic
-here beyond what smtplib gives naturally — by the time this runs, the
-briefing text has already been produced and logged (see main.py), so a
-delivery failure means "the email didn't arrive," never "the briefing
-was lost."
+Sends the finished briefing as a plain-text email, optionally paired
+with an HTML alternative (see brief.build_html_briefing — built
+directly from the same code-generated flag data, never from LLM text,
+so it carries the same safety guarantee as the plain-text fallback).
+No retry logic here beyond what smtplib gives naturally — by the time
+this runs, the briefing text has already been produced and logged (see
+main.py), so a delivery failure means "the email didn't arrive," never
+"the briefing was lost."
 """
 
 from __future__ import annotations
 
 import smtplib
 from dataclasses import dataclass
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 
 class DeliveryError(Exception):
@@ -33,8 +37,18 @@ class SMTPConfig:
     timeout_seconds: float = 15.0
 
 
-def build_message(subject: str, body: str, config: SMTPConfig) -> MIMEText:
-    msg = MIMEText(body, "plain", "utf-8")
+def build_message(subject: str, body: str, config: SMTPConfig, html_body: Optional[str] = None) -> Union[MIMEText, MIMEMultipart]:
+    """Plain-text-only message when `html_body` is omitted (matches
+    every existing caller/test). With `html_body`, builds a
+    multipart/alternative message — plain part first, HTML part last,
+    per RFC 2046 ("last part is the most preferred"), since most mail
+    clients render the last alternative they understand."""
+    if html_body is None:
+        msg = MIMEText(body, "plain", "utf-8")
+    else:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
     msg["Subject"] = subject
     msg["From"] = config.from_address
     msg["To"] = config.to_address
@@ -46,12 +60,13 @@ def send_briefing(
     body: str,
     config: SMTPConfig,
     smtp_client_factory: Optional[Callable[[], smtplib.SMTP]] = None,
+    html_body: Optional[str] = None,
 ) -> None:
     """`smtp_client_factory` is injectable for testing — must return a
     context-manager-capable SMTP-like object (smtplib.SMTP and
     smtplib.SMTP_SSL both qualify). Defaults to a real SMTP connection
     to config.host/port."""
-    msg = build_message(subject, body, config)
+    msg = build_message(subject, body, config, html_body=html_body)
     factory = smtp_client_factory or (lambda: smtplib.SMTP(config.host, config.port, timeout=config.timeout_seconds))
 
     try:

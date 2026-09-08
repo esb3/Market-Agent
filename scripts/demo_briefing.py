@@ -63,18 +63,27 @@ QUIET_DAY_METRICS = {
 QUIET_DAY_MARKET = {"vix": 14.8, "vix9d": 13.9, "vix3m": 15.6, "vix_term_structure": {"shape": "contango", "inverted": False}}
 
 
-def show(label: str, metrics: dict, market: dict, positions_ctx, dq_notes) -> dict:
+def show(label: str, metrics: dict, market: dict, positions_ctx, dq_notes, html_out: Path) -> dict:
     payload = brief.build_payload(metrics, market, positions_ctx, CONFIG, data_quality_notes=dq_notes)
     text = brief.format_fallback(payload, CONFIG)
+    subject = f"Options briefing — {label.title()} (demo)"
+    html_doc = brief.build_html_briefing(payload, subject=subject)
+    html_out.write_text(html_doc)
+
     print(f"=== {label} ===")
     print(json.dumps(payload, indent=2))
     print("--- rendered (deterministic, no LLM) ---")
     print(text)
     print(f"[{len(text)} characters]")
+    print(f"HTML alternative written to {html_out}")
     print()
     return payload
 
 
 if __name__ == "__main__":
-    show("BUSY DAY", BUSY_DAY_METRICS, BUSY_DAY_MARKET, BUSY_DAY_POSITIONS_CTX, BUSY_DAY_DQ_NOTES)
-    show("QUIET DAY", QUIET_DAY_METRICS, QUIET_DAY_MARKET, None, [])
+    import sys as _sys
+    import tempfile as _tempfile
+
+    out_dir = Path(_sys.argv[1]) if len(_sys.argv) > 1 else Path(_tempfile.gettempdir())
+    show("BUSY DAY", BUSY_DAY_METRICS, BUSY_DAY_MARKET, BUSY_DAY_POSITIONS_CTX, BUSY_DAY_DQ_NOTES, out_dir / "demo_busy_day.html")
+    show("QUIET DAY", QUIET_DAY_METRICS, QUIET_DAY_MARKET, None, [], out_dir / "demo_quiet_day.html")

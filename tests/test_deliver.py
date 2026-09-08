@@ -106,3 +106,41 @@ def test_load_smtp_config_prefers_env_over_config_yaml():
 def test_load_smtp_config_raises_when_addresses_missing():
     with pytest.raises(DeliveryError):
         load_smtp_config(CFG, {})
+
+
+# ---------------------------------------------------------------------------
+# HTML alternative (multipart)
+# ---------------------------------------------------------------------------
+
+
+def test_build_message_without_html_is_plain_mimetext():
+    msg = build_message("Subject", "Body", CONFIG)
+    assert msg.get_content_type() == "text/plain"
+
+
+def test_build_message_with_html_is_multipart_alternative():
+    msg = build_message("Subject", "plain body", CONFIG, html_body="<html><body>rich body</body></html>")
+    assert msg.get_content_type() == "multipart/alternative"
+    parts = msg.get_payload()
+    assert len(parts) == 2
+    # plain first, html last -- last alternative is generally preferred by mail clients
+    assert parts[0].get_content_type() == "text/plain"
+    assert parts[1].get_content_type() == "text/html"
+    assert parts[0].get_payload(decode=True).decode("utf-8") == "plain body"
+    assert "rich body" in parts[1].get_payload(decode=True).decode("utf-8")
+
+
+def test_build_message_with_html_still_sets_headers():
+    msg = build_message("Subject", "plain body", CONFIG, html_body="<html></html>")
+    assert msg["Subject"] == "Subject"
+    assert msg["From"] == "me@gmail.com"
+    assert msg["To"] == "me@gmail.com"
+
+
+def test_send_briefing_with_html_body_sends_multipart():
+    factory, server = _fake_smtp_factory()
+    send_briefing("Subject", "plain body", CONFIG, smtp_client_factory=factory, html_body="<html>rich</html>")
+    sent_message = server.sendmail.call_args[0][2]
+    assert "multipart/alternative" in sent_message
+    assert "text/plain" in sent_message
+    assert "text/html" in sent_message

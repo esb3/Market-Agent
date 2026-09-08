@@ -266,6 +266,36 @@ def test_load_yesterday_metrics_ignores_same_day_and_future(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# prune_old_logs
+# ---------------------------------------------------------------------------
+
+
+def test_prune_old_logs_deletes_only_past_cutoff(tmp_path):
+    old = tmp_path / f"{(TODAY - timedelta(days=100)).isoformat()}.json"
+    boundary = tmp_path / f"{(TODAY - timedelta(days=90)).isoformat()}.json"
+    recent = tmp_path / f"{(TODAY - timedelta(days=1)).isoformat()}.json"
+    for p in (old, boundary, recent):
+        p.write_text("{}")
+
+    main.prune_old_logs(tmp_path, keep_days=90, today=TODAY)
+
+    assert not old.exists()
+    assert boundary.exists()  # exactly at the cutoff -- kept, not deleted
+    assert recent.exists()
+
+
+def test_prune_old_logs_ignores_non_date_filenames(tmp_path):
+    stray = tmp_path / "not-a-date.json"
+    stray.write_text("{}")
+    main.prune_old_logs(tmp_path, keep_days=1, today=TODAY)
+    assert stray.exists()
+
+
+def test_prune_old_logs_missing_directory_is_a_noop(tmp_path):
+    main.prune_old_logs(tmp_path / "does_not_exist", keep_days=1, today=TODAY)  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # run_briefing (full orchestration, all deps mocked)
 # ---------------------------------------------------------------------------
 
@@ -273,8 +303,10 @@ def test_load_yesterday_metrics_ignores_same_day_and_future(tmp_path):
 def test_run_briefing_happy_path(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "ROOT", tmp_path)
     deps = _deps()
-    text = main.run_briefing(CONFIG, deps, today=TODAY)
-    assert isinstance(text, str) and text
+    result = main.run_briefing(CONFIG, deps, today=TODAY)
+    assert isinstance(result.text, str) and result.text
+    assert "<html" in result.html
+    assert result.subject == f"Options briefing -- {TODAY.isoformat()}"
     log_path = tmp_path / "logs" / f"{TODAY.isoformat()}.json"
     assert log_path.exists()
     logged = json.loads(log_path.read_text())
@@ -285,8 +317,9 @@ def test_run_briefing_falls_back_when_llm_output_invalid(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "ROOT", tmp_path)
     bad_client = make_anthropic_client(text="AAPL looks bullish here")
     deps = _deps(anthropic_client=bad_client)
-    text = main.run_briefing(CONFIG, deps, today=TODAY)
-    assert "bullish" not in text.lower()
+    result = main.run_briefing(CONFIG, deps, today=TODAY)
+    assert "bullish" not in result.text.lower()
+    assert "bullish" not in result.html.lower()
     log_path = tmp_path / "logs" / f"{TODAY.isoformat()}.json"
     logged = json.loads(log_path.read_text())
     assert any("LLM briefing generation failed" in n for n in logged["data_quality_notes"])
@@ -297,8 +330,8 @@ def test_run_briefing_falls_back_when_llm_call_raises(tmp_path, monkeypatch):
     broken_client = Mock()
     broken_client.messages.create.side_effect = RuntimeError("API down")
     deps = _deps(anthropic_client=broken_client)
-    text = main.run_briefing(CONFIG, deps, today=TODAY)
-    assert isinstance(text, str)  # fell back instead of raising
+    result = main.run_briefing(CONFIG, deps, today=TODAY)
+    assert isinstance(result.text, str)  # fell back instead of raising
 
 
 def test_run_briefing_continues_past_one_ticker_failure(tmp_path, monkeypatch):
@@ -313,5 +346,22 @@ def test_run_briefing_continues_past_one_ticker_failure(tmp_path, monkeypatch):
 
     yf_client.daily_bars.side_effect = daily_bars_side_effect
     deps = _deps(yf_client=yf_client)
-    text = main.run_briefing(config, deps, today=TODAY)
-    assert isinstance(text, str) and text  # run completed despite BROKEN failing
+    result = main.run_briefing(config, deps, today=TODAY)
+    assert isinstance(result.text, str) and result.text  # run completed despite BROKEN failing
+
+
+def test_run_briefing_prunes_logs_older_than_keep_days(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    config = dict(CONFIG, logging=dict(CONFIG["logging"], keep_days=5))
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True)
+    old_log = logs_dir / f"{(TODAY - timedelta(days=30)).isoformat()}.json"
+    old_log.write_text("{}")
+    recent_log = logs_dir / f"{(TODAY - timedelta(days=1)).isoformat()}.json"
+    recent_log.write_text("{}")
+
+    deps = _deps()
+    main.run_briefing(config, deps, today=TODAY)
+
+    assert not old_log.exists()
+    assert recent_log.exists()

@@ -133,6 +133,13 @@ briefing:
   max_flags: 8
   llm_model: "claude-sonnet-4-6"
   llm_temperature: 0
+  # Attempts before falling back to raw, LLM-free flags. On a validator
+  # failure (forbidden language or over the char cap), the retry sends
+  # the specific violation back to the model as a correction, not a
+  # blind resend -- at temperature 0, resending the same prompt would
+  # just reproduce the same violation. Raise for fewer fallback days at
+  # the cost of possible extra API latency/cost; 1 disables retry.
+  llm_max_attempts: 2
 
 delivery:
   smtp_host: "smtp.gmail.com"

@@ -30,7 +30,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -66,6 +66,13 @@ class Deps:
     nasdaq_client: Any
     anthropic_client: Any = None  # None -> brief.py builds a real one
     smtp_client_factory: Any = None  # None -> deliver.py builds a real one
+
+
+@dataclass(frozen=True)
+class BriefingResult:
+    text: str  # plain-text body -- LLM-phrased, or the deterministic fallback
+    html: str  # HTML alternative, built only from code-generated flag data (see brief.build_html_briefing)
+    subject: str
 
 
 def load_config(path: Path = ROOT / "config.yaml") -> dict:
@@ -348,6 +355,23 @@ def write_run_log(logs_dir: Path, today: date, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, default=str))
 
 
+def prune_old_logs(logs_dir: Path, keep_days: int, today: date) -> None:
+    """Deletes logs/<date>.json files older than `keep_days` (config's
+    logging.keep_days). Run logs are the only thing under logs/ that
+    grows unbounded -- the IV history SQLite store is deliberately kept
+    forever (more history only makes IV rank/percentile more reliable)."""
+    if not logs_dir.exists():
+        return
+    cutoff = today - timedelta(days=keep_days)
+    for p in logs_dir.glob("*.json"):
+        try:
+            d = date.fromisoformat(p.stem)
+        except ValueError:
+            continue
+        if d < cutoff:
+            p.unlink()
+
+
 def load_yesterday_metrics(logs_dir: Path, today: date) -> Optional[Dict[str, dict]]:
     if not logs_dir.exists():
         return None
@@ -374,12 +398,14 @@ def load_yesterday_metrics(logs_dir: Path, today: date) -> Optional[Dict[str, di
 # ---------------------------------------------------------------------------
 
 
-def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> str:
-    """Runs the full pipeline and returns the final briefing text.
-    Never raises for a single ticker/source failure -- those become
-    data quality notes. Falls back to brief.format_fallback() if the
-    LLM call or its output validation fails."""
+def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> BriefingResult:
+    """Runs the full pipeline and returns the final briefing (plain text
+    + HTML alternative). Never raises for a single ticker/source
+    failure -- those become data quality notes. Falls back to
+    brief.format_fallback() if the LLM call or its output validation
+    fails (after brief.py's own retry-with-correction attempts)."""
     today = today or date.today()
+    subject = f"Options briefing -- {today.isoformat()}"
 
     iv_store_path = ROOT / "data" / "iv_history.sqlite3"
     iv_conn = snapshot.open_store(iv_store_path)
@@ -421,7 +447,9 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> str:
 
     log_notes = all_notes
     try:
-        text = brief.generate_and_validate(payload, config, client=deps.anthropic_client)
+        text = brief.generate_and_validate(
+            payload, config, client=deps.anthropic_client, max_attempts=config["briefing"].get("llm_max_attempts", 2)
+        )
     except Exception as exc:  # LLM call failed, or its output failed validation -- fall back, never send nothing
         # The exception detail (e.g. BriefingValidationError) may quote
         # the offending LLM text verbatim for debuggability -- that must
@@ -431,6 +459,10 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> str:
         all_notes.append("LLM briefing generation failed, sent raw flags instead (see run log for detail)")
         payload["data_quality_notes"] = all_notes
         text = brief.format_fallback(payload, config)
+
+    # Built only from payload's code-generated Flag messages, never from
+    # the LLM's text above -- see brief.build_html_briefing's docstring.
+    html = brief.build_html_briefing(payload, subject=subject)
 
     write_run_log(
         ROOT / config["logging"]["dir"],
@@ -445,8 +477,9 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> str:
             "raw_inputs": raw_inputs,
         },
     )
+    prune_old_logs(ROOT / config["logging"]["dir"], config["logging"]["keep_days"], today)
 
-    return text
+    return BriefingResult(text=text, html=html, subject=subject)
 
 
 def build_deps(config: dict) -> Deps:
@@ -490,16 +523,15 @@ def main() -> None:
         return
 
     deps = build_deps(config)
-    text = run_briefing(config, deps, today=today)
+    result = run_briefing(config, deps, today=today)
 
     if args.dry_run:
-        print(text)
-        print(f"\n[{len(text)} characters]")
+        print(result.text)
+        print(f"\n[{len(result.text)} characters]")
         return
 
     smtp_config = deliver.load_smtp_config(config, dict(os.environ))
-    subject = f"Options briefing -- {today.isoformat()}"
-    deliver.send_briefing(subject, text, smtp_config)
+    deliver.send_briefing(result.subject, result.text, smtp_config, html_body=result.html)
 
 
 if __name__ == "__main__":
