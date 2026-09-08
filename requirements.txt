@@ -6,7 +6,7 @@ pytest
 requests
 yfinance
 yfinance_cache
+anthropic
 
 # added in later build steps:
 # pandas_market_calendars
-# anthropic

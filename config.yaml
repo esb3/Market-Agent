@@ -112,6 +112,19 @@ calendar:
   #     label: "FOMC decision"
   macro_dates: []
 
+delta_thresholds:
+  # Metrics below don't have a natural "breach" level, so they're only
+  # surfaced when they've moved at least this much since yesterday's
+  # logged run — this is what keeps a quiet day quiet even for metrics
+  # without a hard threshold. Units match the metric (percentage
+  # points for vol/IV-like numbers, index points for range percentile).
+  dma_distance_pct: 3.0
+  realized_vol_pts: 5.0
+  iv_minus_rv_pts: 5.0
+  term_structure_slope_pts: 2.0
+  range_percentile_pts: 25.0
+  vix_level_pts: 2.0
+
 briefing:
   # Hard cap enforced in code (brief.py), and stated verbatim in the LLM
   # prompt. Sized to fit a phone screen without scrolling.
