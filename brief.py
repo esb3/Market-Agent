@@ -92,19 +92,34 @@ def _ticker_flags(ticker: str, m: dict, y: dict, positions_ctx: Optional[dict], 
             )
         )
 
+    # IV rank and percentile are highly correlated but not identical
+    # (percentile is more robust to a single historical outlier) --
+    # either crossing the band is enough to flag, folded into one line
+    # rather than two near-duplicate flags.
     iv_rank = m.get("iv_rank")  # {"value":.., "sufficient":bool, "label":..}
-    if iv_rank and iv_rank.get("sufficient") and iv_rank.get("value") is not None:
-        bands = config["iv_rank_bands"]
-        val = iv_rank["value"]
-        if val <= bands["low"] or val >= bands["high"]:
-            out.append(
-                Flag(
-                    severity=60,
-                    category="iv_rank",
-                    ticker=ticker,
-                    message=f"{ticker} IV rank {val:.0f} ({iv_rank.get('label', '')})",
-                )
+    iv_percentile = m.get("iv_percentile")
+    bands = config["iv_rank_bands"]
+
+    def _iv_extreme(stat: Optional[dict]) -> bool:
+        return bool(stat and stat.get("sufficient") and stat.get("value") is not None and (stat["value"] <= bands["low"] or stat["value"] >= bands["high"]))
+
+    if _iv_extreme(iv_rank) or _iv_extreme(iv_percentile):
+        parts = []
+        label = ""
+        if iv_rank and iv_rank.get("sufficient"):
+            parts.append(f"rank {iv_rank['value']:.0f}")
+            label = iv_rank.get("label", "")
+        if iv_percentile and iv_percentile.get("sufficient"):
+            parts.append(f"pct {iv_percentile['value']:.0f}")
+            label = label or iv_percentile.get("label", "")
+        out.append(
+            Flag(
+                severity=60,
+                category="iv_rank",
+                ticker=ticker,
+                message=f"{ticker} IV {' / '.join(parts)} ({label})",
             )
+        )
 
     days_to_earnings = m.get("days_to_earnings")
     if days_to_earnings is not None and 0 <= days_to_earnings <= config["earnings"]["blackout_days"]:
@@ -158,11 +173,15 @@ def _ticker_flags(ticker: str, m: dict, y: dict, positions_ctx: Optional[dict], 
 
 # (metric key in payload, label, config threshold key, value format)
 DELTA_METRICS = [
+    ("dma20_distance_pct", "20DMA distance", "dma_distance_pct", "{:+.1f}%"),
     ("dma50_distance_pct", "50DMA distance", "dma_distance_pct", "{:+.1f}%"),
+    ("dma200_distance_pct", "200DMA distance", "dma_distance_pct", "{:+.1f}%"),
     ("realized_vol_20d", "20d realized vol", "realized_vol_pts", "{:.1f}%"),
+    ("realized_vol_30d", "30d realized vol", "realized_vol_pts", "{:.1f}%"),
     ("iv_minus_rv", "IV-RV", "iv_minus_rv_pts", "{:+.1f}pts"),
     ("term_structure_slope", "term structure slope", "term_structure_slope_pts", "{:+.2f}"),
     ("range_percentile", "30d range pct", "range_percentile_pts", "{:.0f}"),
+    ("expected_move_pct", "expected move", "expected_move_pct_pts", "{:.1f}%"),
 ]
 
 

@@ -24,7 +24,7 @@ CONFIG = {
     "vix": {"flag_inversion": True},
     "delta_thresholds": {
         "dma_distance_pct": 3.0, "realized_vol_pts": 5.0, "iv_minus_rv_pts": 5.0,
-        "term_structure_slope_pts": 2.0, "range_percentile_pts": 25.0, "vix_level_pts": 2.0,
+        "term_structure_slope_pts": 2.0, "range_percentile_pts": 25.0, "vix_level_pts": 2.0, "expected_move_pct_pts": 2.0,
     },
     "briefing": {"max_characters": 600, "max_flags": 8, "llm_model": "claude-sonnet-4-6", "llm_temperature": 0},
 }

@@ -25,7 +25,7 @@ CONFIG = {
     "positions": {"max_concurrent_positions": 10, "dte_window": [0, 7], "staleness_days": 3},
     "calendar": {"macro_dates": [], "blackout_days": 3},
     "dividends": {"blackout_days": 3},
-    "delta_thresholds": {"dma_distance_pct": 3.0, "realized_vol_pts": 5.0, "iv_minus_rv_pts": 5.0, "term_structure_slope_pts": 2.0, "range_percentile_pts": 25.0, "vix_level_pts": 2.0},
+    "delta_thresholds": {"dma_distance_pct": 3.0, "realized_vol_pts": 5.0, "iv_minus_rv_pts": 5.0, "term_structure_slope_pts": 2.0, "range_percentile_pts": 25.0, "vix_level_pts": 2.0, "expected_move_pct_pts": 2.0},
     "briefing": {"max_characters": 600, "max_flags": 8, "llm_model": "claude-sonnet-4-6", "llm_temperature": 0},
     "logging": {"dir": "logs", "keep_days": 90},
 }
@@ -133,6 +133,28 @@ def test_fetch_ticker_data_happy_path(tmp_path):
     assert m["atm_iv"] == pytest.approx(0.24)
     assert not disagreements
     assert raw["yahoo_close"] == pytest.approx(150.0)
+
+
+def test_fetch_ticker_data_iv_rank_and_percentile_with_sufficient_history(tmp_path):
+    # Neither path had ever actually been exercised with seeded history
+    # in a test before -- caught on a spec re-read alongside the
+    # iv_percentile gap itself (rank was computed and tested via a fresh,
+    # empty store, which trivially suppresses both).
+    snapshot_mod = __import__("snapshot")
+    conn = snapshot_mod.open_store(tmp_path / "iv.sqlite3")
+    for i in range(25):
+        conn_as_of = TODAY - timedelta(days=25 - i)
+        snapshot_mod.write_snapshot(
+            conn, snapshot_mod.IVSnapshot(ticker="AAPL", as_of=conn_as_of, atm_iv=0.20 + (i % 5) * 0.01, survived_count=10)
+        )
+    deps = _deps()
+    m, raw, notes, disagreements = main.fetch_ticker_data(
+        "AAPL", deps=deps, iv_conn=conn, chain_config=CHAIN_CONFIG, config=CONFIG, today=TODAY
+    )
+    assert m["iv_rank"]["sufficient"] is True
+    assert 0 <= m["iv_rank"]["value"] <= 100
+    assert m["iv_percentile"]["sufficient"] is True
+    assert 0 <= m["iv_percentile"]["value"] <= 100
 
 
 def test_fetch_ticker_data_yfinance_unavailable_returns_empty_metrics(tmp_path):
@@ -374,6 +396,22 @@ def test_load_yesterday_metrics_ignores_same_day_and_future(tmp_path):
     assert result is None
 
 
+def test_load_yesterday_market_metrics_returns_dict(tmp_path):
+    main.write_run_log(tmp_path, TODAY - timedelta(days=1), {"metrics": {}, "market_metrics": {"vix": 15.0}})
+    result = main.load_yesterday_market_metrics(tmp_path, TODAY)
+    assert result == {"vix": 15.0}
+
+
+def test_load_yesterday_market_metrics_empty_dict_when_no_prior_log(tmp_path):
+    # Always a dict, never None -- callers do .get("vix") on it directly.
+    assert main.load_yesterday_market_metrics(tmp_path, TODAY) == {}
+
+
+def test_load_yesterday_market_metrics_empty_dict_when_key_absent(tmp_path):
+    main.write_run_log(tmp_path, TODAY - timedelta(days=1), {"metrics": {}})  # no market_metrics key at all
+    assert main.load_yesterday_market_metrics(tmp_path, TODAY) == {}
+
+
 # ---------------------------------------------------------------------------
 # prune_old_logs
 # ---------------------------------------------------------------------------
@@ -420,6 +458,29 @@ def test_run_briefing_happy_path(tmp_path, monkeypatch):
     assert log_path.exists()
     logged = json.loads(log_path.read_text())
     assert "AAPL" in logged["metrics"]
+
+
+def test_run_briefing_wires_yesterdays_vix_into_market_metrics(tmp_path, monkeypatch):
+    # End-to-end regression test for the vix_yesterday wiring bug: an
+    # earlier version of main.py never populated this key at all, so
+    # brief.py's VIX-level delta flag was unreachable in a real run
+    # despite passing every existing test (none of which ran main.py
+    # against a real logs/ directory with a prior day's log in it).
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True)
+    main.write_run_log(logs_dir, TODAY - timedelta(days=1), {"metrics": {}, "market_metrics": {"vix": 15.0}})
+
+    deps = _deps(fred_client=make_fred_client(complete=True))  # today's vix_complex reports vix=15.0 by default...
+    # ...override to a level that trips the vix_level_pts=2.0 threshold vs yesterday's logged 15.0
+    obs = lambda v: SimpleNamespace(value=v)
+    deps.fred_client.vix_complex.return_value = {"vix": obs(22.0), "vix9d": obs(20.0), "vix3m": obs(24.0), "tbill_3m": obs(5.0)}
+
+    main.run_briefing(CONFIG, deps, today=TODAY)
+
+    today_log = json.loads((logs_dir / f"{TODAY.isoformat()}.json").read_text())
+    assert today_log["market_metrics"]["vix_yesterday"] == 15.0
+    assert today_log["market_metrics"]["vix"] == 22.0
 
 
 def test_run_briefing_falls_back_when_llm_output_invalid(tmp_path, monkeypatch):

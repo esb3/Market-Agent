@@ -263,6 +263,18 @@ def _fetch_options_metrics(
         else:
             notes.append(f"{ticker}: IV rank suppressed ({rank.label()}, need {iv_history_cfg['suppress_below_days']}+)")
 
+        percentile = metrics.sampled_percentile(
+            [v * 100 for v in history],
+            front_iv.value * 100,
+            min_sample=iv_history_cfg["suppress_below_days"],
+            mature_sample=iv_history_cfg["mature_sample_days"],
+        )
+        if percentile.sufficient:
+            m["iv_percentile"] = {"value": percentile.value, "sufficient": True, "label": percentile.label()}
+        # No separate suppression note here -- rank and percentile share
+        # the exact same history/sample size, so the note above already
+        # says why IV context is thin for this ticker.
+
         rv30 = m.get("realized_vol_30d")
         if rv30 is not None:
             m["iv_minus_rv"] = metrics.iv_minus_rv(front_iv.value * 100, rv30)
@@ -451,7 +463,10 @@ def prune_old_logs(logs_dir: Path, keep_days: int, today: date) -> None:
             p.unlink()
 
 
-def load_yesterday_metrics(logs_dir: Path, today: date) -> Optional[Dict[str, dict]]:
+def _load_yesterday_log(logs_dir: Path, today: date) -> Optional[dict]:
+    """The full previous day's log payload (see write_run_log) -- the
+    most recent logs/<date>.json strictly before `today`. None on day
+    one, or if logs/ was cleared/pruned past it."""
     if not logs_dir.exists():
         return None
     prior_dates: List[date] = []
@@ -466,10 +481,25 @@ def load_yesterday_metrics(logs_dir: Path, today: date) -> Optional[Dict[str, di
         return None
     latest = max(prior_dates)
     try:
-        data = json.loads((logs_dir / f"{latest.isoformat()}.json").read_text())
+        return json.loads((logs_dir / f"{latest.isoformat()}.json").read_text())
     except (OSError, json.JSONDecodeError):
         return None
-    return data.get("metrics")
+
+
+def load_yesterday_metrics(logs_dir: Path, today: date) -> Optional[Dict[str, dict]]:
+    """Yesterday's per-ticker metrics, for build_flags()'s "changed
+    materially since yesterday" ticker-level comparisons."""
+    log = _load_yesterday_log(logs_dir, today)
+    return log.get("metrics") if log else None
+
+
+def load_yesterday_market_metrics(logs_dir: Path, today: date) -> Dict[str, Any]:
+    """Yesterday's market-wide metrics (VIX level, etc.), for the
+    market-level delta comparisons in brief._market_flags(). Always a
+    dict (possibly empty), unlike load_yesterday_metrics, since callers
+    read individual keys with .get() rather than checking for None."""
+    log = _load_yesterday_log(logs_dir, today)
+    return (log.get("market_metrics") if log else None) or {}
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +549,10 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> Brie
     all_notes.extend(market_notes)
     iv_conn.close()
 
-    yesterday = load_yesterday_metrics(ROOT / config["logging"]["dir"], today)
+    logs_dir = ROOT / config["logging"]["dir"]
+    yesterday = load_yesterday_metrics(logs_dir, today)
+    market_metrics["vix_yesterday"] = load_yesterday_market_metrics(logs_dir, today).get("vix")
+
     payload = brief.build_payload(
         tickers_metrics, market_metrics, positions_ctx, config, yesterday=yesterday, data_quality_notes=all_notes
     )
@@ -544,7 +577,7 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> Brie
     html = brief.build_html_briefing(payload, subject=subject)
 
     write_run_log(
-        ROOT / config["logging"]["dir"],
+        logs_dir,
         today,
         {
             "date": today.isoformat(),
@@ -556,7 +589,7 @@ def run_briefing(config: dict, deps: Deps, today: Optional[date] = None) -> Brie
             "raw_inputs": raw_inputs,
         },
     )
-    prune_old_logs(ROOT / config["logging"]["dir"], config["logging"]["keep_days"], today)
+    prune_old_logs(logs_dir, config["logging"]["keep_days"], today)
 
     return BriefingResult(text=text, html=html, subject=subject)
 

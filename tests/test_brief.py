@@ -33,6 +33,7 @@ CONFIG = {
         "term_structure_slope_pts": 2.0,
         "range_percentile_pts": 25.0,
         "vix_level_pts": 2.0,
+        "expected_move_pct_pts": 2.0,
     },
     "briefing": {"max_characters": 600, "max_flags": 8, "llm_model": "claude-sonnet-4-6", "llm_temperature": 0},
 }
@@ -133,6 +134,46 @@ def test_iv_rank_flag_suppressed_when_insufficient_sample():
 
 def test_iv_rank_flag_silent_in_middle_band():
     metrics = {"AAPL": {"iv_rank": {"value": 50, "sufficient": True, "label": "200-day sample"}}}
+    flags = build_flags(metrics, {}, None, CONFIG)
+    assert not any(f.category == "iv_rank" for f in flags)
+
+
+def test_iv_percentile_alone_triggers_flag():
+    metrics = {"AAPL": {"iv_percentile": {"value": 90, "sufficient": True, "label": "200-day sample"}}}
+    flags = build_flags(metrics, {}, None, CONFIG)
+    iv_flags = [f for f in flags if f.category == "iv_rank"]
+    assert len(iv_flags) == 1
+    assert "pct 90" in iv_flags[0].message
+    assert "rank" not in iv_flags[0].message
+
+
+def test_iv_rank_and_percentile_both_shown_in_one_flag():
+    metrics = {
+        "AAPL": {
+            "iv_rank": {"value": 82, "sufficient": True, "label": "200-day sample"},
+            "iv_percentile": {"value": 79, "sufficient": True, "label": "200-day sample"},
+        }
+    }
+    flags = build_flags(metrics, {}, None, CONFIG)
+    iv_flags = [f for f in flags if f.category == "iv_rank"]
+    assert len(iv_flags) == 1  # one flag, not two, for closely related info
+    assert "rank 82" in iv_flags[0].message
+    assert "pct 79" in iv_flags[0].message
+
+
+def test_iv_rank_extreme_still_flags_even_if_percentile_is_mid_band():
+    metrics = {
+        "AAPL": {
+            "iv_rank": {"value": 90, "sufficient": True, "label": "200-day sample"},
+            "iv_percentile": {"value": 50, "sufficient": True, "label": "200-day sample"},
+        }
+    }
+    flags = build_flags(metrics, {}, None, CONFIG)
+    assert any(f.category == "iv_rank" for f in flags)  # either crossing is enough
+
+
+def test_iv_percentile_suppressed_when_insufficient():
+    metrics = {"AAPL": {"iv_percentile": {"value": 90, "sufficient": False, "label": "unavailable"}}}
     flags = build_flags(metrics, {}, None, CONFIG)
     assert not any(f.category == "iv_rank" for f in flags)
 
@@ -257,6 +298,31 @@ def test_vix_percentile_flag_suppressed_when_insufficient():
     assert not any(f.category == "vix_percentile" for f in flags)
 
 
+def test_vix_level_delta_flag_fires_above_threshold():
+    # vix_level_pts threshold is 2.0 in CONFIG's delta_thresholds
+    market = {"vix": 22.0, "vix_yesterday": 15.0}
+    flags = build_flags({}, market, None, CONFIG)
+    delta_flags = [f for f in flags if f.category == "delta" and f.ticker is None]
+    assert len(delta_flags) == 1
+    assert "VIX 22.0" in delta_flags[0].message
+
+
+def test_vix_level_delta_flag_silent_below_threshold():
+    market = {"vix": 15.5, "vix_yesterday": 15.0}
+    flags = build_flags({}, market, None, CONFIG)
+    assert not any(f.category == "delta" and f.ticker is None for f in flags)
+
+
+def test_vix_level_delta_flag_silent_without_yesterday_value():
+    # This is exactly the bug this test guards against: main.py must
+    # actually populate market_metrics["vix_yesterday"] for this flag to
+    # ever be reachable at all -- if it's missing, the flag correctly
+    # stays silent rather than raising.
+    market = {"vix": 22.0}
+    flags = build_flags({}, market, None, CONFIG)
+    assert not any(f.category == "delta" and f.ticker is None for f in flags)
+
+
 def test_delta_flag_fires_above_threshold():
     metrics = {"AAPL": {"dma50_distance_pct": 8.0}}
     yesterday = {"AAPL": {"dma50_distance_pct": 3.0}}  # delta = 5.0 >= threshold 3.0
@@ -275,6 +341,25 @@ def test_delta_flag_silent_with_no_yesterday_data():
     metrics = {"AAPL": {"dma50_distance_pct": 8.0}}
     flags = build_flags(metrics, {}, None, CONFIG)  # no yesterday at all
     assert not any(f.category == "delta" for f in flags)
+
+
+@pytest.mark.parametrize(
+    "key,label,current,previous",
+    [
+        ("dma20_distance_pct", "20DMA", 8.0, 3.0),
+        ("dma200_distance_pct", "200DMA", 8.0, 3.0),
+        ("realized_vol_30d", "30d realized vol", 25.0, 15.0),
+        ("expected_move_pct", "expected move", 8.0, 5.0),
+    ],
+)
+def test_delta_flag_covers_every_dma_and_realized_vol_window(key, label, current, previous):
+    # Regression coverage: dma20/dma200/realized_vol_30d are computed by
+    # main.py but were silently never checked for a delta flag until
+    # this was caught on a spec re-read.
+    metrics = {"AAPL": {key: current}}
+    yesterday = {"AAPL": {key: previous}}
+    flags = build_flags(metrics, {}, None, CONFIG, yesterday=yesterday)
+    assert any(f.category == "delta" and label in f.message for f in flags)
 
 
 def test_flags_ranked_by_severity_descending():

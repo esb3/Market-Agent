@@ -143,6 +143,7 @@ delta_thresholds:
   term_structure_slope_pts: 2.0
   range_percentile_pts: 25.0
   vix_level_pts: 2.0
+  expected_move_pct_pts: 2.0
 
 briefing:
   # Hard cap enforced in code (brief.py), and stated verbatim in the LLM
