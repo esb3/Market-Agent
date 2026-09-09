@@ -7,7 +7,6 @@ import brief
 from brief import (
     BriefingValidationError,
     Flag,
-    build_data_quality_notes,
     build_flags,
     build_html_briefing,
     build_payload,
@@ -72,6 +71,13 @@ def test_validate_clean_text_passes():
         "odds favor a bounce",
         "RSI shows overbought conditions",
         "stock is oversold",
+        # Regression cases: these bypassed an earlier version of
+        # FORBIDDEN_PATTERNS, whose "suggests" pattern required a
+        # literal "a"/"an" article immediately after the verb.
+        "the pattern suggests weakness ahead of earnings",
+        "momentum here suggests strength",
+        "there is a good chance of a bounce",
+        "looking for a reversal here",
     ],
 )
 def test_validate_catches_forbidden_language(text):
@@ -441,33 +447,6 @@ def test_build_payload_truncates_to_max_flags():
     }
     payload = build_payload(metrics, {}, None, config)
     assert len(payload["flags"]) == 1
-
-
-# ---------------------------------------------------------------------------
-# build_data_quality_notes
-# ---------------------------------------------------------------------------
-
-
-def test_data_quality_notes_price_disagreement():
-    cmp = SimpleNamespace(ticker="AAPL", disputed=True, disagreement_pct=2.5)
-    notes = build_data_quality_notes(price_comparisons=[cmp])
-    assert "AAPL" in notes[0] and "2.5%" in notes[0]
-
-
-def test_data_quality_notes_earnings_unconfirmed():
-    from datetime import date
-
-    ec = SimpleNamespace(ticker="AAPL", unconfirmed=True, resolved_date=date(2026, 9, 24))
-    notes = build_data_quality_notes(earnings_comparisons=[ec])
-    assert "AAPL" in notes[0] and "unconfirmed" in notes[0]
-
-
-def test_data_quality_notes_stale_banner_goes_first():
-    notes = build_data_quality_notes(
-        iv_suppressed={"AAPL": "only 2 contracts survived"},
-        stale_data_banner="AAPL prices from cache, 2 days old",
-    )
-    assert notes[0].startswith("STALE DATA:")
 
 
 # ---------------------------------------------------------------------------

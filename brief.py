@@ -285,35 +285,6 @@ def nominal_tickers(all_tickers: Sequence[str], flags: Sequence[Flag]) -> List[s
     return [t for t in all_tickers if t not in flagged]
 
 
-def build_data_quality_notes(
-    price_comparisons: Sequence = (),
-    earnings_comparisons: Sequence = (),
-    iv_suppressed: Optional[Dict[str, str]] = None,
-    fetch_failures: Optional[Dict[str, str]] = None,
-    positions_stale_note: Optional[str] = None,
-    stale_data_banner: Optional[str] = None,
-) -> List[str]:
-    """Every derived number's honesty-rule caveats, collected into one
-    list. Order: staleness banner first (most important), then
-    per-ticker issues."""
-    notes: List[str] = []
-    for cmp in price_comparisons:
-        if cmp.disputed:
-            notes.append(f"{cmp.ticker}: Yahoo/Stooq closes disagree {cmp.disagreement_pct:.1f}% — price metrics skipped")
-    for ec in earnings_comparisons:
-        if ec.unconfirmed and ec.resolved_date is not None:
-            notes.append(f"{ec.ticker}: earnings date {ec.resolved_date.isoformat()} unconfirmed")
-    for ticker, reason in (iv_suppressed or {}).items():
-        notes.append(f"{ticker}: IV unavailable — {reason}")
-    for ticker, reason in (fetch_failures or {}).items():
-        notes.append(f"{ticker}: {reason}")
-    if positions_stale_note:
-        notes.append(positions_stale_note)
-    if stale_data_banner:
-        notes.insert(0, f"STALE DATA: {stale_data_banner}")
-    return notes
-
-
 def build_payload(
     tickers_metrics: Dict[str, dict],
     market_metrics: dict,
@@ -350,7 +321,7 @@ FORBIDDEN_PATTERNS = [
     r"\bexpect(?:s|ed|ing)?\b",
     r"\blikely to\b",
     r"\bunlikely to\b",
-    r"\bsuggests? (?:a|an) (?:move|rally|selloff|breakout|reversal|bounce|drop|rise)\b",
+    r"\bsuggests? (?:a |an )?(?:move|rally|selloff|breakout|reversal|bounce|drop|rise|weakness|strength|momentum)\b",
     r"\bgood (?:entry|exit)\b",
     r"\b(?:entry|exit) point\b",
     r"\bconsider (?:buying|selling|going|adding|trimming|rolling)\b",
@@ -364,13 +335,14 @@ FORBIDDEN_PATTERNS = [
     r"\bsell the rally\b",
     r"\btime to (?:buy|sell)\b",
     r"\bgood (?:time|opportunity) to\b",
-    r"\bwatch for a (?:breakout|reversal|move)\b",
-    r"\blook(?:s|ing)? for a (?:breakout|move|reversal)\b",
+    r"\bwatch for (?:a |an )?(?:breakout|reversal|move)\b",
+    r"\blook(?:s|ing)? for (?:a |an )?(?:breakout|move|reversal)\b",
     r"\brecommend(?:s|ed|ation)?\b",
     r"\bprice target\b",
     r"\b(?:will|going to) (?:rally|fall|drop|rise|break|move|bounce)\b",
     r"\bprobability of\b",
     r"\bodds (?:of|favor)\b",
+    r"\bchances? of\b",
     r"\boverbought\b",
     r"\boversold\b",
 ]
