@@ -12,6 +12,15 @@ fails the run loudly on any directional/recommendation language — see
 `brief.py`), and **terse by default** (a hard character cap, only
 metrics that cross a threshold or moved materially since yesterday get
 surfaced, everything else rolls into one "N tickers nominal" line).
+Every flag on a ticker you hold a position in gets tagged `[position]`
+so it stands out in a multi-ticker briefing.
+
+Delivered as email with two parts: a plain-text body (LLM-phrased when
+available, otherwise the same content formatted by code) and an HTML
+alternative most mail clients will show instead — severity-striped by
+flag, and built directly from the same code-generated flag text rather
+than the LLM's phrasing, so it carries the stricter of the two safety
+guarantees regardless of which path produced the plain-text body.
 
 ## One-time setup (Windows)
 
@@ -83,6 +92,15 @@ Run the test suite any time:
 
 ```powershell
 .venv\Scripts\python.exe -m pytest
+```
+
+**Preview the output without any live data or API keys** — runs the
+real flag-building and rendering code against hand-set realistic
+numbers, writes both a plain-text and an HTML sample for a busy day
+and a quiet day:
+
+```powershell
+.venv\Scripts\python.exe scripts\demo_briefing.py
 ```
 
 ## Scheduling (Windows Task Scheduler)
@@ -205,6 +223,23 @@ logs/            per-run JSON: metrics, output, source disagreements (gitignored
   entirely below `iv_history.suppress_below_days` of local snapshots,
   and labeled "thin" below `mature_sample_days`. This can't be
   shortcut — there's no free source of historical IV to backfill from.
+  VIX has the opposite problem solved differently: FRED carries decades
+  of it for free, so VIX percentile is computed from real history from
+  day one, no accumulation wait.
+- **Every computed metric that isn't in a flag category is dead
+  weight.** The full metric list — gap, DMA distance (20/50/200), 20d
+  and 30d realized vol, IV rank and percentile, IV−RV, term structure
+  slope, expected move, VIX level/percentile/term-structure, days to
+  earnings/ex-dividend, and macro dates from `config.yaml` — each has
+  either a threshold check or a "changed since yesterday" delta check
+  in `brief.py`, specifically because a metric that's computed but
+  never checked against anything is invisible and useless. If you add
+  a new metric anywhere in the pipeline, give it one of these two or it
+  will never appear in a briefing.
+- **Config mistakes fail fast.** `main.py` validates `config.yaml` has
+  every required section before touching the network, and a missing
+  `FRED_API_KEY` or SMTP address prints a one-line "Setup error"
+  instead of a traceback.
 - **This project was built in a sandbox with no live network access**
   to Yahoo, Stooq, FRED, or Nasdaq (only PyPI and GitHub). Every
   `sources/` client was built against the real installed library's
