@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -6,6 +7,7 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
+import deliver as deliver_mod
 import main
 import positions as positions_mod
 from chains import ChainCleaningConfig
@@ -603,3 +605,163 @@ def test_load_config_missing_section_raises_config_error(tmp_path):
     with pytest.raises(main.ConfigError) as exc_info:
         main.load_config(path)
     assert "briefing" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# main() -- the actual CLI entrypoint (argparse, config/setup error
+# handling, the trading-day skip, --dry-run, and delivery)
+# ---------------------------------------------------------------------------
+
+def _fake_result(text="AAPL nominal", html="<html>x</html>", subject="Options briefing -- 2026-09-08"):
+    return main.BriefingResult(text=text, html=html, subject=subject)
+
+
+def test_main_skips_on_non_trading_day(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--date", "2026-09-06"])  # a Sunday
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: False)
+    called = []
+    monkeypatch.setattr(main, "build_deps", lambda cfg: called.append("build_deps"))
+    monkeypatch.setattr(main, "run_briefing", lambda *a, **k: called.append("run_briefing"))
+
+    main.main()
+
+    assert called == []  # never got past the trading-day check
+    assert "not a trading day" in capsys.readouterr().out
+
+
+def test_main_force_runs_on_non_trading_day(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--date", "2026-09-06", "--force", "--dry-run"])
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: False)
+    monkeypatch.setattr(main, "build_deps", lambda cfg: _deps())
+    monkeypatch.setattr(main, "run_briefing", lambda cfg, deps, today: _fake_result())
+
+    main.main()  # must not skip, must not raise
+
+    assert "not a trading day" not in capsys.readouterr().out
+
+
+def test_main_config_error_prints_clean_message_and_exits(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+
+    def raise_config_error():
+        raise main.ConfigError("missing section: ['briefing']")
+
+    monkeypatch.setattr(main, "load_config", raise_config_error)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.main()
+
+    assert exc_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "Config error:" in out
+    assert "briefing" in out
+
+
+def test_main_build_deps_source_unavailable_exits_cleanly(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--force", "--date", "2026-09-08"])
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: True)
+
+    def raise_source_unavailable(cfg):
+        raise SourceUnavailable("FRED_API_KEY is not set (check .env)")
+
+    monkeypatch.setattr(main, "build_deps", raise_source_unavailable)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.main()
+
+    assert exc_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "Setup error:" in out
+    assert "FRED_API_KEY" in out
+
+
+def test_main_dry_run_writes_html_preview_and_prints_text(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--force", "--date", "2026-09-08"])
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(main, "build_deps", lambda cfg: _deps())
+    monkeypatch.setattr(main, "run_briefing", lambda cfg, deps, today: _fake_result(text="AAPL nominal", html="<html>preview</html>"))
+
+    main.main()
+
+    out = capsys.readouterr().out
+    assert "AAPL nominal" in out
+    assert "characters]" in out
+    preview_path = tmp_path / "logs" / "dry_run_preview.html"
+    assert preview_path.exists()
+    assert preview_path.read_text() == "<html>preview</html>"
+
+
+def test_main_sends_email_on_normal_run(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--force", "--date", "2026-09-08"])
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(main, "build_deps", lambda cfg: _deps())
+    monkeypatch.setattr(main, "run_briefing", lambda cfg, deps, today: _fake_result(text="AAPL nominal", html="<html>y</html>", subject="Subj"))
+
+    sent = {}
+    monkeypatch.setattr(
+        deliver_mod,
+        "load_smtp_config",
+        lambda cfg, env: deliver_mod.SMTPConfig(
+            host="smtp.gmail.com", port=587, use_tls=True, username="me@gmail.com",
+            password="secret", from_address="me@gmail.com", to_address="me@gmail.com",
+        ),
+    )
+    monkeypatch.setattr(
+        deliver_mod,
+        "send_briefing",
+        lambda subject, body, config, smtp_client_factory=None, html_body=None: sent.update(
+            subject=subject, body=body, html_body=html_body
+        ),
+    )
+
+    main.main()
+
+    assert sent["subject"] == "Subj"
+    assert sent["body"] == "AAPL nominal"
+    assert sent["html_body"] == "<html>y</html>"
+
+
+def test_main_delivery_setup_error_prints_text_and_exits(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--force", "--date", "2026-09-08"])
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(main, "build_deps", lambda cfg: _deps())
+    monkeypatch.setattr(main, "run_briefing", lambda cfg, deps, today: _fake_result(text="AAPL nominal"))
+
+    def raise_delivery_error(cfg, env):
+        raise deliver_mod.DeliveryError("delivery from/to address not configured")
+
+    monkeypatch.setattr(deliver_mod, "load_smtp_config", raise_delivery_error)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.main()
+
+    assert exc_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "Setup error:" in out
+    assert "AAPL nominal" in out  # briefing text still shown even though it wasn't sent
+
+
+def test_main_date_argument_is_passed_through(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--dry-run", "--force", "--date", "2026-09-08"])
+    monkeypatch.setattr(main, "load_config", lambda: FULL_CONFIG)
+    monkeypatch.setattr(main, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(main, "build_deps", lambda cfg: _deps())
+
+    received = {}
+
+    def fake_run_briefing(cfg, deps, today):
+        received["today"] = today
+        return _fake_result()
+
+    monkeypatch.setattr(main, "run_briefing", fake_run_briefing)
+
+    main.main()
+
+    assert received["today"] == date(2026, 9, 8)
