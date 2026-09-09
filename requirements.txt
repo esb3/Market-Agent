@@ -1,12 +1,14 @@
-pandas
-numpy
-pyyaml
-python-dotenv
-pytest
-requests
-yfinance
-yfinance_cache
-anthropic
-
-# added in later build steps:
-# pandas_market_calendars
+# Pinned to the versions this project was built and tested against.
+# Unpin (or bump deliberately) if you want newer releases, but this
+# tool runs unattended on a schedule -- a silent upstream breaking
+# change is a worse failure mode than a slightly stale dependency.
+pandas==2.3.3
+numpy==2.4.6
+PyYAML==6.0.3
+python-dotenv==1.2.3
+pytest==9.1.1
+requests==2.34.2
+yfinance==1.7.0
+yfinance-cache==0.9.3
+anthropic==1.4.0
+pandas_market_calendars==5.4.0
