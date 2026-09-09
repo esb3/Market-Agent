@@ -80,6 +80,26 @@ def send_briefing(
         raise DeliveryError(f"failed to send briefing email: {exc}") from exc
 
 
+def check_connection(
+    config: SMTPConfig,
+    smtp_client_factory: Optional[Callable[[], smtplib.SMTP]] = None,
+) -> None:
+    """Connects and authenticates, but sends nothing -- for a one-shot
+    setup check (see scripts/doctor.py) that catches a bad host/port/
+    App Password before the first real scheduled run rather than
+    during it. Raises DeliveryError on any failure, same as
+    send_briefing()."""
+    factory = smtp_client_factory or (lambda: smtplib.SMTP(config.host, config.port, timeout=config.timeout_seconds))
+    try:
+        with factory() as server:
+            if config.use_tls:
+                server.starttls()
+            if config.username and config.password:
+                server.login(config.username, config.password)
+    except (smtplib.SMTPException, OSError) as exc:
+        raise DeliveryError(f"SMTP connection/login failed: {exc}") from exc
+
+
 def load_smtp_config(cfg: dict, env: dict) -> SMTPConfig:
     """Merges config.yaml's delivery section with .env overrides (env
     wins, since addresses/credentials are secrets that shouldn't live

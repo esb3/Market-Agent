@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from deliver import DeliveryError, SMTPConfig, build_message, load_smtp_config, send_briefing
+from deliver import DeliveryError, SMTPConfig, build_message, check_connection, load_smtp_config, send_briefing
 
 CONFIG = SMTPConfig(
     host="smtp.gmail.com",
@@ -144,3 +144,37 @@ def test_send_briefing_with_html_body_sends_multipart():
     assert "multipart/alternative" in sent_message
     assert "text/plain" in sent_message
     assert "text/html" in sent_message
+
+
+# ---------------------------------------------------------------------------
+# check_connection
+# ---------------------------------------------------------------------------
+
+
+def test_check_connection_happy_path_logs_in_and_sends_nothing():
+    factory, server = _fake_smtp_factory()
+    check_connection(CONFIG, smtp_client_factory=factory)
+    server.starttls.assert_called_once()
+    server.login.assert_called_once_with("me@gmail.com", "app-password")
+    server.sendmail.assert_not_called()
+
+
+def test_check_connection_skips_login_without_credentials():
+    factory, server = _fake_smtp_factory()
+    config = SMTPConfig(**{**CONFIG.__dict__, "username": "", "password": ""})
+    check_connection(config, smtp_client_factory=factory)
+    server.login.assert_not_called()
+
+
+def test_check_connection_wraps_auth_error():
+    factory, server = _fake_smtp_factory()
+    server.login.side_effect = smtplib.SMTPAuthenticationError(535, b"bad app password")
+    with pytest.raises(DeliveryError):
+        check_connection(CONFIG, smtp_client_factory=factory)
+
+
+def test_check_connection_wraps_connection_refused():
+    factory, server = _fake_smtp_factory()
+    factory.side_effect = OSError("connection refused")
+    with pytest.raises(DeliveryError):
+        check_connection(CONFIG, smtp_client_factory=factory)

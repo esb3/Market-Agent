@@ -60,14 +60,19 @@ want position-aware flags (existing exposure, concentration, expirations
 approaching). The tool runs fine with no file there; it just skips those
 flags.
 
-**Verify FRED series IDs once**, on this machine (not verifiable during
-this project's build — see `sources/fred.py`'s docstring):
+**Run the setup doctor once**, after filling in `.env` and `config.yaml`
+— checks config, FRED's series IDs actually resolve (not verifiable
+during this project's build — see `sources/fred.py`'s docstring), and
+does a live SMTP login (no email sent) to catch a bad host/App Password
+now instead of at 8:30am:
 
 ```powershell
-.venv\Scripts\python.exe scripts\verify_fred_series.py
+.venv\Scripts\python.exe scripts\doctor.py
 ```
 
-Fix `SERIES_IDS` in `sources/fred.py` if anything prints `FAIL`.
+Fix anything it prints `FAIL` on before scheduling this. `WARN` lines
+(a missing `ANTHROPIC_API_KEY`, no positions file yet) aren't blocking
+— the tool has a working fallback for both.
 
 ## Running it
 
@@ -202,7 +207,7 @@ metrics.py       pure functions, no I/O, fully unit tested
 brief.py         metrics -> flags -> LLM -> validator -> final text
 deliver.py       SMTP email
 main.py          orchestration, failure handling
-scripts/         Task Scheduler wrapper .bat files, FRED verification, demo
+scripts/         Task Scheduler wrapper .bat files, doctor, FRED verification, demo
 launchd/         macOS scheduling (reference only -- see Scheduling section)
 data/positions/  your manual CSV exports (gitignored)
 logs/            per-run JSON: metrics, output, source disagreements (gitignored)
@@ -246,6 +251,6 @@ logs/            per-run JSON: metrics, output, source disagreements (gitignored
   actual API/response shapes (inspected via source, not guessed from
   memory) and is fully unit-tested against mocked responses, but
   nothing here has been smoke-tested against the real internet. Run
-  `scripts/verify_fred_series.py` and a `--dry-run` briefing on your
+  `scripts/doctor.py` and a `--dry-run` briefing on your
   own machine before trusting live output, and watch the data quality
   notes section on the first few real runs.
